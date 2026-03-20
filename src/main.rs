@@ -1,4 +1,5 @@
 mod cli;
+mod taskdef;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
