@@ -9,3 +9,7 @@
 .vscode/
 *.swp
 *.swo
+
+# Coverage artifacts
+tarpaulin-report.html
+tarpaulin-report.json
