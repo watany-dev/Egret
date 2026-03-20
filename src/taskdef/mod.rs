@@ -42,6 +42,7 @@ pub struct ContainerDefinition {
 
     /// Essential flag (default: true).
     #[serde(default = "default_essential")]
+    #[allow(dead_code)]
     pub essential: bool,
 
     /// CMD equivalent.
@@ -61,12 +62,15 @@ pub struct ContainerDefinition {
     pub port_mappings: Vec<PortMapping>,
 
     /// CPU units (1024 = 1 vCPU).
+    #[allow(dead_code)]
     pub cpu: Option<u32>,
 
     /// Hard memory limit (MiB).
+    #[allow(dead_code)]
     pub memory: Option<u32>,
 
     /// Soft memory limit (MiB).
+    #[allow(dead_code)]
     pub memory_reservation: Option<u32>,
 }
 

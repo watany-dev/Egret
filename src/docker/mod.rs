@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
+use bollard::Docker;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StopContainerOptions,
 };
 use bollard::models::{EndpointSettings, HostConfig, PortBinding};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
-use bollard::Docker;
 use futures_util::Stream;
 use futures_util::StreamExt;
 
@@ -49,12 +49,15 @@ pub struct PortMappingConfig {
 pub struct ContainerInfo {
     pub id: String,
     pub name: String,
+    #[allow(dead_code)]
     pub family: String,
+    #[allow(dead_code)]
     pub state: String,
 }
 
 /// Information about an Egret-managed network.
 pub struct NetworkInfo {
+    #[allow(dead_code)]
     pub id: String,
     pub name: String,
 }
@@ -77,10 +80,7 @@ impl DockerClient {
     pub async fn create_network(&self, family: &str) -> Result<String, DockerError> {
         let name = format!("egret-{family}");
 
-        let labels = HashMap::from([
-            ("egret.managed", "true"),
-            ("egret.task", family),
-        ]);
+        let labels = HashMap::from([("egret.managed", "true"), ("egret.task", family)]);
 
         // Check if network already exists
         let existing = self
@@ -145,16 +145,14 @@ impl DockerClient {
     // --- Container ---
 
     /// Create a container (does not start it). Returns the container ID.
-    pub async fn create_container(
-        &self,
-        config: &ContainerConfig,
-    ) -> Result<String, DockerError> {
-        let mut exposed_ports = HashMap::new();
+    #[allow(clippy::zero_sized_map_values)] // Docker API requires HashMap for exposed_ports
+    pub async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError> {
+        let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
         let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
 
         for pm in &config.port_mappings {
             let container_key = format!("{}/{}", pm.container_port, pm.protocol);
-            exposed_ports.insert(container_key.clone(), HashMap::new());
+            exposed_ports.insert(container_key.clone(), HashMap::default());
             port_bindings.insert(
                 container_key,
                 Some(vec![PortBinding {
@@ -224,19 +222,14 @@ impl DockerClient {
 
     /// Start a container by ID.
     pub async fn start_container(&self, id: &str) -> Result<(), DockerError> {
-        self.docker
-            .start_container::<String>(id, None)
-            .await?;
+        self.docker.start_container::<String>(id, None).await?;
         Ok(())
     }
 
     /// Stop a container by ID (10 second timeout, then kill).
     pub async fn stop_container(&self, id: &str) -> Result<(), DockerError> {
         self.docker
-            .stop_container(
-                id,
-                Some(StopContainerOptions { t: 10 }),
-            )
+            .stop_container(id, Some(StopContainerOptions { t: 10 }))
             .await?;
         Ok(())
     }
@@ -296,10 +289,7 @@ impl DockerClient {
     // --- Logs ---
 
     /// Stream container logs (follow mode).
-    pub fn stream_logs(
-        &self,
-        id: &str,
-    ) -> impl Stream<Item = Result<String, DockerError>> + '_ {
+    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, DockerError>> + '_ {
         self.docker
             .logs(
                 id,

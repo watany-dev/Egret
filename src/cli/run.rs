@@ -80,10 +80,7 @@ fn build_container_config(
     }
 }
 
-async fn stream_logs_until_signal(
-    client: &Arc<DockerClient>,
-    containers: &[(String, String)],
-) {
+async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for (id, name) in containers {
@@ -114,11 +111,7 @@ async fn stream_logs_until_signal(
     }
 }
 
-async fn cleanup(
-    client: &DockerClient,
-    containers: &[(String, String)],
-    network: &str,
-) {
+async fn cleanup(client: &DockerClient, containers: &[(String, String)], network: &str) {
     for (id, name) in containers {
         if let Err(e) = client.stop_container(id).await {
             tracing::warn!(container = %name, error = %e, "Failed to stop container");
