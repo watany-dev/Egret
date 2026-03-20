@@ -27,7 +27,7 @@ audit:
 	cargo deny check advisories
 
 deny:
-	cargo deny check
+	cargo deny check licenses bans sources
 
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
