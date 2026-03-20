@@ -1,19 +1,36 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
-Egret is a new project repository with minimal setup. The codebase is currently empty and ready for initial development.
+Egret is a local ECS task runner — run ECS task definitions locally by satisfying the runtime contract ECS apps expect (metadata endpoints, credential providers, dependsOn, health checks), without recreating the ECS control plane.
 
-## Current State
+## Build & Development
 
-- Empty repository with only basic project structure
-- No build system or development tools configured yet
-- No existing code architecture to document
+```bash
+make build      # cargo build --release
+make test       # cargo test
+make lint       # cargo clippy -- -D warnings
+make fmt        # cargo fmt
+make fmt-check  # cargo fmt -- --check
+make check      # fmt-check + lint + test
+```
 
-This file should be updated as the project grows to include:
-- Build and development commands
-- Code architecture and structure
-- Testing approaches
-- Deployment procedures
+## Architecture
+
+- `src/cli/` — CLI commands (clap): run, stop, version
+- `src/taskdef/` — ECS task definition JSON parser and types
+- `src/docker/` — Docker Engine API client (bollard)
+- `src/orchestrator/` — Container lifecycle and dependsOn DAG
+- `src/metadata/` — ECS metadata endpoint mock (axum)
+- `src/credentials/` — Credential provider mock
+- `src/secrets/` — Secrets local resolver
+
+## Key Dependencies
+
+- `clap` — CLI framework
+- `bollard` — Docker API client
+- `tokio` — Async runtime
+- `serde`/`serde_json` — JSON handling
+- `axum` — HTTP server for metadata/credentials
+- `tracing` — Structured logging
+- `anyhow`/`thiserror` — Error handling
