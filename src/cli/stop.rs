@@ -1,5 +1,7 @@
 use super::StopArgs;
 
+/// Execute the `stop` subcommand.
+#[allow(clippy::print_stdout)]
 pub fn execute(args: &StopArgs) {
     if args.all {
         println!("Stopping all running tasks...");

@@ -1,1 +1,1 @@
-// Container orchestration and dependsOn DAG - Phase 4
+//! Container lifecycle orchestration and `dependsOn` DAG.

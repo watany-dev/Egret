@@ -1,5 +1,7 @@
 use super::RunArgs;
 
+/// Execute the `run` subcommand.
+#[allow(clippy::print_stdout)]
 pub fn execute(args: &RunArgs) {
     tracing::info!(
         task_definition = %args.task_definition.display(),

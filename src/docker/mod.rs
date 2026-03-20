@@ -1,1 +1,1 @@
-// Docker API integration - Phase 1
+//! Docker Engine API client integration.

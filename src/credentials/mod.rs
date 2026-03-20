@@ -1,1 +1,1 @@
-// Credential provider mock - Phase 3
+//! Credential provider mock for local development.

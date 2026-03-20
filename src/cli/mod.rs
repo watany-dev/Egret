@@ -1,9 +1,12 @@
+//! CLI command definitions and argument parsing.
+
 pub mod run;
 pub mod stop;
 pub mod version;
 
-use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
 
 /// Egret - Local ECS task runner
 #[derive(Parser)]

@@ -1,1 +1,1 @@
-// Secrets local resolver - Phase 2
+//! Secrets local resolver.
