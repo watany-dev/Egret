@@ -14,6 +14,8 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bollard = "0.18"
+futures-util = "0.3"
 
 [lints.rust]
 unsafe_code = "forbid"
