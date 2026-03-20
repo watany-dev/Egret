@@ -1,6 +1,8 @@
+use anyhow::Result;
+
 use super::RunArgs;
 
-pub fn execute(args: &RunArgs) {
+pub async fn execute(args: &RunArgs) -> Result<()> {
     tracing::info!(
         task_definition = %args.task_definition.display(),
         "Starting ECS task locally"
@@ -11,5 +13,7 @@ pub fn execute(args: &RunArgs) {
         "egret run: task definition = {}",
         args.task_definition.display()
     );
-    println!("Not yet implemented. Coming in Phase 1.");
+    println!("Not yet implemented. Coming in Iteration 3.");
+
+    Ok(())
 }
