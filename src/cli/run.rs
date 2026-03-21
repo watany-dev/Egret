@@ -10,20 +10,31 @@ use crate::docker::{ContainerConfig, DockerApi, DockerClient, PortMappingConfig}
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
 /// Execute the `run` subcommand.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 pub async fn execute(args: &RunArgs) -> Result<()> {
-    // 1. Parse task definition
     let task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
 
-    // 2. Connect to Docker
     let client = Arc::new(DockerClient::connect().await?);
 
-    // 3. Create network
+    let (network_name, containers) = run_task(&*client, &task_def).await?;
+
+    stream_logs_until_signal(&client, &containers).await;
+
+    cleanup(&*client, &containers, &network_name).await;
+
+    Ok(())
+}
+
+/// Create the network and start all containers for a task definition.
+pub async fn run_task(
+    client: &(impl DockerApi + ?Sized),
+    task_def: &TaskDefinition,
+) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
 
-    // 4. Create and start containers
     let mut containers = Vec::new();
     for container_def in &task_def.container_definitions {
         let config = build_container_config(&task_def.family, container_def, &network_name);
@@ -33,13 +44,62 @@ pub async fn execute(args: &RunArgs) -> Result<()> {
         tracing::info!(container = %container_def.name, "Started container");
     }
 
-    // 5. Stream logs + wait for signal
-    stream_logs_until_signal(&client, &containers).await;
+    Ok((network_name, containers))
+}
 
-    // 6. Cleanup
-    cleanup(&client, &containers, &network_name).await;
+/// Best-effort cleanup: stop and remove containers, then remove the network.
+pub async fn cleanup(
+    client: &(impl DockerApi + ?Sized),
+    containers: &[(String, String)],
+    network: &str,
+) {
+    for (id, name) in containers {
+        if let Err(e) = client.stop_container(id).await {
+            tracing::warn!(container = %name, error = %e, "Failed to stop container");
+        }
+        if let Err(e) = client.remove_container(id).await {
+            tracing::warn!(container = %name, error = %e, "Failed to remove container");
+        }
+        tracing::info!(container = %name, "Cleaned up");
+    }
 
-    Ok(())
+    if let Err(e) = client.remove_network(network).await {
+        tracing::warn!(network = %network, error = %e, "Failed to remove network");
+    }
+    tracing::info!(network = %network, "Network removed");
+}
+
+#[cfg(not(tarpaulin_include))]
+#[allow(clippy::print_stdout)]
+async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    for (id, name) in containers {
+        let client = Arc::clone(client);
+        let id = id.clone();
+        let name = name.clone();
+
+        handles.push(tokio::spawn(async move {
+            let mut stream = client.stream_logs(&id);
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(line) => println!("[{name}] {line}"),
+                    Err(e) => {
+                        tracing::warn!(container = %name, error = %e, "Log stream error");
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c().await.ok();
+    tracing::info!("Received SIGINT, shutting down...");
+
+    for handle in &handles {
+        handle.abort();
+    }
 }
 
 fn build_container_config(
@@ -80,55 +140,6 @@ fn build_container_config(
         network_aliases: vec![def.name.clone()],
         labels,
     }
-}
-
-#[allow(clippy::print_stdout)]
-async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
-
-    for (id, name) in containers {
-        let client = Arc::clone(client);
-        let id = id.clone();
-        let name = name.clone();
-
-        handles.push(tokio::spawn(async move {
-            let mut stream = client.stream_logs(&id);
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(line) => println!("[{name}] {line}"),
-                    Err(e) => {
-                        tracing::warn!(container = %name, error = %e, "Log stream error");
-                        break;
-                    }
-                }
-            }
-        }));
-    }
-
-    // Wait for Ctrl+C
-    tokio::signal::ctrl_c().await.ok();
-    tracing::info!("Received SIGINT, shutting down...");
-
-    for handle in &handles {
-        handle.abort();
-    }
-}
-
-async fn cleanup(client: &DockerClient, containers: &[(String, String)], network: &str) {
-    for (id, name) in containers {
-        if let Err(e) = client.stop_container(id).await {
-            tracing::warn!(container = %name, error = %e, "Failed to stop container");
-        }
-        if let Err(e) = client.remove_container(id).await {
-            tracing::warn!(container = %name, error = %e, "Failed to remove container");
-        }
-        tracing::info!(container = %name, "Cleaned up");
-    }
-
-    if let Err(e) = client.remove_network(network).await {
-        tracing::warn!(network = %network, error = %e, "Failed to remove network");
-    }
-    tracing::info!(network = %network, "Network removed");
 }
 
 #[cfg(test)]
