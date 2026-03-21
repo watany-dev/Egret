@@ -1,1 +1,11 @@
-{}
+{
+  "effortLevel": "high",
+  "language": "japanese",
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(cargo:*)",
+      "Bash(git:*)"
+    ]
+  }
+}
