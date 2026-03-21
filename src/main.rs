@@ -9,6 +9,7 @@ mod credentials;
 mod docker;
 mod metadata;
 mod orchestrator;
+mod overrides;
 mod secrets;
 mod taskdef;
 
