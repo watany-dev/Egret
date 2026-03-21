@@ -14,6 +14,7 @@ use crate::metadata::{
     self, ContainerMetadata, MetadataServer, ServerState, SharedState, build_container_metadata,
     build_task_metadata,
 };
+use crate::orchestrator::{ContainerSpec, orchestrate_startup};
 use crate::overrides::OverrideConfig;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::{ContainerDefinition, Environment, TaskDefinition};
@@ -90,6 +91,9 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
 }
 
 /// Create the network and start all containers for a task definition.
+///
+/// Uses the orchestrator to resolve `dependsOn` DAG and start containers in
+/// the correct order, waiting for dependency conditions between layers.
 pub async fn run_task(
     client: &(impl ContainerRuntime + ?Sized),
     task_def: &TaskDefinition,
@@ -98,21 +102,29 @@ pub async fn run_task(
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
 
-    let mut containers = Vec::new();
-    for container_def in &task_def.container_definitions {
-        let config = build_container_config(
-            &task_def.family,
-            container_def,
-            &network_name,
-            metadata_port,
-        );
-        let id = client.create_container(&config).await?;
-        client.start_container(&id).await?;
-        containers.push((id, container_def.name.clone()));
-        tracing::info!(container = %container_def.name, "Started container");
-    }
+    let specs: Vec<ContainerSpec> = task_def
+        .container_definitions
+        .iter()
+        .map(|def| {
+            let config =
+                build_container_config(&task_def.family, def, &network_name, metadata_port);
+            ContainerSpec {
+                name: def.name.clone(),
+                config,
+                depends_on: def.depends_on.clone(),
+                health_check: def.health_check.clone(),
+                essential: def.essential,
+            }
+        })
+        .collect();
 
-    Ok((network_name, containers))
+    match orchestrate_startup(client, specs).await {
+        Ok(result) => Ok((network_name, result.started)),
+        Err((partial, err)) => {
+            cleanup(client, &partial.started, &network_name).await;
+            Err(err.into())
+        }
+    }
 }
 
 /// Start the metadata/credentials sidecar server.
@@ -291,7 +303,9 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use crate::container::test_support::MockContainerClient;
-    use crate::taskdef::{ContainerDefinition, Environment, PortMapping};
+    use crate::taskdef::{
+        ContainerDefinition, DependencyCondition, DependsOn, Environment, PortMapping,
+    };
 
     fn single_container_taskdef() -> TaskDefinition {
         TaskDefinition {
@@ -711,11 +725,78 @@ mod tests {
         };
 
         let config = build_container_config("test", &def, "egret-test", None);
-        let hc = config.health_check.as_ref().expect("should have health check");
+        let hc = config
+            .health_check
+            .as_ref()
+            .expect("should have health check");
         assert_eq!(hc.test, vec!["CMD-SHELL", "curl -f http://localhost/"]);
         assert_eq!(hc.interval_ns, 10_000_000_000);
         assert_eq!(hc.timeout_ns, 5_000_000_000);
         assert_eq!(hc.retries, 3);
         assert_eq!(hc.start_period_ns, 15_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn run_task_with_dependencies() {
+        let mock = MockContainerClient {
+            create_network_results: Mutex::new(VecDeque::from([Ok("egret-test".to_string())])),
+            create_container_results: Mutex::new(VecDeque::from([
+                Ok("db-id".to_string()),
+                Ok("app-id".to_string()),
+            ])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(()), Ok(())])),
+            ..MockContainerClient::new()
+        };
+
+        let task_def = TaskDefinition {
+            family: "test".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
+            container_definitions: vec![
+                ContainerDefinition {
+                    name: "db".to_string(),
+                    image: "postgres:16".to_string(),
+                    essential: true,
+                    command: vec![],
+                    entry_point: vec![],
+                    environment: vec![],
+                    port_mappings: vec![],
+                    secrets: vec![],
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
+                },
+                ContainerDefinition {
+                    name: "app".to_string(),
+                    image: "my-app:latest".to_string(),
+                    essential: true,
+                    command: vec![],
+                    entry_point: vec![],
+                    environment: vec![],
+                    port_mappings: vec![],
+                    secrets: vec![],
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: None,
+                    depends_on: vec![DependsOn {
+                        container_name: "db".to_string(),
+                        condition: DependencyCondition::Start,
+                    }],
+                    health_check: None,
+                },
+            ],
+        };
+
+        let (network, containers) = run_task(&mock, &task_def, None)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(network, "egret-test");
+        assert_eq!(containers.len(), 2);
+        // DAG ensures db starts before app
+        assert_eq!(containers[0].1, "db");
+        assert_eq!(containers[1].1, "app");
     }
 }

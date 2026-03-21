@@ -55,7 +55,6 @@ pub struct ContainerDefinition {
 
     /// Essential flag (default: true).
     #[serde(default = "default_essential")]
-    #[allow(dead_code)]
     pub essential: bool,
 
     /// CMD equivalent.
@@ -92,12 +91,10 @@ pub struct ContainerDefinition {
 
     /// Container dependencies (startup ordering).
     #[serde(default)]
-    #[allow(dead_code)]
     pub depends_on: Vec<DependsOn>,
 
     /// Health check configuration.
     #[serde(default)]
-    #[allow(dead_code)]
     pub health_check: Option<HealthCheck>,
 }
 
@@ -158,7 +155,6 @@ pub enum DependencyCondition {
 /// Container dependency reference.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct DependsOn {
     /// Name of the container this dependency refers to.
     pub container_name: String,
@@ -169,7 +165,6 @@ pub struct DependsOn {
 /// Health check configuration (ECS-compatible, seconds).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct HealthCheck {
     /// Health check command (e.g. `["CMD-SHELL", "curl -f http://localhost/"]`).
     pub command: Vec<String>,

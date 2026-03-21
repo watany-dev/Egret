@@ -27,7 +27,6 @@ pub enum OrchestratorError {
 }
 
 /// Lightweight dependency information for DAG resolution.
-#[allow(dead_code)]
 pub struct DependencyInfo {
     pub name: String,
     pub depends_on: Vec<DependsOn>,
@@ -37,10 +36,7 @@ pub struct DependencyInfo {
 ///
 /// Returns layers of container names that can be started concurrently within each layer.
 /// Layer N must complete (according to its dependsOn conditions) before layer N+1 starts.
-#[allow(dead_code)]
-pub fn resolve_start_order(
-    deps: &[DependencyInfo],
-) -> Result<Vec<Vec<String>>, OrchestratorError> {
+pub fn resolve_start_order(deps: &[DependencyInfo]) -> Result<Vec<Vec<String>>, OrchestratorError> {
     if deps.is_empty() {
         return Ok(vec![]);
     }
@@ -189,17 +185,16 @@ fn format_cycle_path(path: &[&str]) -> String {
 }
 
 /// Container specification for orchestrated startup.
-#[allow(dead_code)]
 pub struct ContainerSpec {
     pub name: String,
     pub config: crate::container::ContainerConfig,
     pub depends_on: Vec<DependsOn>,
     pub health_check: Option<HealthCheck>,
+    #[allow(dead_code)]
     pub essential: bool,
 }
 
 /// Result of orchestrated startup.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct StartupResult {
     /// Containers that were started: (id, name).
@@ -213,7 +208,6 @@ pub struct StartupResult {
 /// 3. Between layers: wait for dependency conditions
 ///
 /// On error, returns the partially started containers for cleanup by the caller.
-#[allow(dead_code)]
 pub async fn orchestrate_startup(
     client: &(impl ContainerRuntime + ?Sized),
     specs: Vec<ContainerSpec>,
@@ -247,14 +241,22 @@ pub async fn orchestrate_startup(
         // Start all containers in this layer
         for name in layer {
             let spec = specs_by_name[name];
-            let id = client
-                .create_container(&spec.config)
-                .await
-                .map_err(|e| (StartupResult { started: started.clone() }, OrchestratorError::from(e)))?;
-            client
-                .start_container(&id)
-                .await
-                .map_err(|e| (StartupResult { started: started.clone() }, OrchestratorError::from(e)))?;
+            let id = client.create_container(&spec.config).await.map_err(|e| {
+                (
+                    StartupResult {
+                        started: started.clone(),
+                    },
+                    OrchestratorError::from(e),
+                )
+            })?;
+            client.start_container(&id).await.map_err(|e| {
+                (
+                    StartupResult {
+                        started: started.clone(),
+                    },
+                    OrchestratorError::from(e),
+                )
+            })?;
             tracing::info!(container = %name, "Started container");
             started.push((id.clone(), name.clone()));
             id_by_name.insert(name.clone(), id);
@@ -280,7 +282,14 @@ pub async fn orchestrate_startup(
                             dep_health_check,
                         )
                         .await
-                        .map_err(|e| (StartupResult { started: started.clone() }, e))?;
+                        .map_err(|e| {
+                            (
+                                StartupResult {
+                                    started: started.clone(),
+                                },
+                                e,
+                            )
+                        })?;
                     }
                 }
             }
@@ -291,7 +300,6 @@ pub async fn orchestrate_startup(
 }
 
 /// Wait for a dependency condition to be met.
-#[allow(dead_code)]
 pub async fn wait_for_condition(
     client: &(impl ContainerRuntime + ?Sized),
     id: &str,
@@ -366,7 +374,6 @@ pub async fn watch_essential_exit(
 }
 
 /// Poll `inspect_container` until health status becomes "healthy" or timeout.
-#[allow(dead_code)]
 async fn wait_for_healthy(
     client: &(impl ContainerRuntime + ?Sized),
     id: &str,
@@ -626,14 +633,8 @@ mod tests {
             retries: 3,
             start_period: 0,
         };
-        let result = wait_for_condition(
-            &mock,
-            "id1",
-            "db",
-            DependencyCondition::Healthy,
-            Some(&hc),
-        )
-        .await;
+        let result =
+            wait_for_condition(&mock, "id1", "db", DependencyCondition::Healthy, Some(&hc)).await;
         assert!(result.is_ok());
     }
 
@@ -660,14 +661,8 @@ mod tests {
             retries: 1,
             start_period: 0,
         };
-        let result = wait_for_condition(
-            &mock,
-            "id1",
-            "db",
-            DependencyCondition::Healthy,
-            Some(&hc),
-        )
-        .await;
+        let result =
+            wait_for_condition(&mock, "id1", "db", DependencyCondition::Healthy, Some(&hc)).await;
         assert!(
             matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
             "unexpected: {result:?}"
@@ -703,14 +698,8 @@ mod tests {
 
         // Use tokio::time::pause for deterministic time control
         tokio::time::pause();
-        let result = wait_for_condition(
-            &mock,
-            "id1",
-            "db",
-            DependencyCondition::Healthy,
-            Some(&hc),
-        )
-        .await;
+        let result =
+            wait_for_condition(&mock, "id1", "db", DependencyCondition::Healthy, Some(&hc)).await;
         assert!(
             matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
             "unexpected: {result:?}"
@@ -792,10 +781,7 @@ mod tests {
                 .push_back(Ok(()));
         }
 
-        let specs = vec![
-            make_spec("a", &[]),
-            make_spec("b", &[]),
-        ];
+        let specs = vec![make_spec("a", &[]), make_spec("b", &[])];
         let result = orchestrate_startup(&mock, specs).await.unwrap();
         assert_eq!(result.started.len(), 2);
     }

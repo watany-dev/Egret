@@ -55,14 +55,9 @@ pub trait ContainerRuntime: Send + Sync {
     ) -> Result<Vec<ContainerInfo>, ContainerError>;
 
     /// Inspect a container and return its current state.
-    #[allow(dead_code)]
-    async fn inspect_container(
-        &self,
-        id: &str,
-    ) -> Result<ContainerInspection, ContainerError>;
+    async fn inspect_container(&self, id: &str) -> Result<ContainerInspection, ContainerError>;
 
     /// Wait for a container to exit. Returns the exit status code.
-    #[allow(dead_code)]
     async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError>;
 }
 
@@ -127,27 +122,28 @@ pub struct NetworkInfo {
 }
 
 /// Result of inspecting a container.
-#[allow(dead_code)]
 pub struct ContainerInspection {
+    #[allow(dead_code)]
     pub id: String,
     pub state: ContainerState,
 }
 
 /// Container state from inspection.
-#[allow(dead_code)]
 pub struct ContainerState {
     /// Status string (e.g., "running", "exited").
+    #[allow(dead_code)]
     pub status: String,
     /// Whether the container is running.
+    #[allow(dead_code)]
     pub running: bool,
     /// Exit code (if exited).
+    #[allow(dead_code)]
     pub exit_code: Option<i64>,
     /// Health check status (e.g., "healthy", "unhealthy", "starting").
     pub health_status: Option<String>,
 }
 
 /// Result of waiting for a container to exit.
-#[allow(dead_code)]
 pub struct WaitResult {
     pub status_code: i64,
 }
@@ -412,10 +408,7 @@ impl ContainerRuntime for ContainerClient {
             .collect())
     }
 
-    async fn inspect_container(
-        &self,
-        id: &str,
-    ) -> Result<ContainerInspection, ContainerError> {
+    async fn inspect_container(&self, id: &str) -> Result<ContainerInspection, ContainerError> {
         let resp = self.docker.inspect_container(id, None).await?;
         let state = resp.state.as_ref();
 
@@ -550,10 +543,7 @@ pub mod test_support {
         pub remove_network_results: Mutex<VecDeque<Result<(), ContainerError>>>,
         pub list_containers_results: Mutex<VecDeque<Result<Vec<ContainerInfo>, ContainerError>>>,
         pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, ContainerError>>>,
-        #[allow(dead_code)]
-        pub inspect_container_results:
-            Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
-        #[allow(dead_code)]
+        pub inspect_container_results: Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
         pub wait_container_results: Mutex<VecDeque<Result<WaitResult, ContainerError>>>,
     }
 
@@ -825,7 +815,11 @@ mod tests {
         assert_eq!(
             hc.test.as_deref(),
             Some(
-                ["CMD-SHELL".to_string(), "curl -f http://localhost/".to_string()].as_slice()
+                [
+                    "CMD-SHELL".to_string(),
+                    "curl -f http://localhost/".to_string()
+                ]
+                .as_slice()
             )
         );
         assert_eq!(hc.interval, Some(10_000_000_000));
