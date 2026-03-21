@@ -231,6 +231,38 @@ pub async fn wait_for_condition(
     }
 }
 
+/// Result of an essential container exiting.
+#[allow(dead_code)]
+pub struct EssentialExit {
+    pub container_name: String,
+    pub exit_code: i64,
+}
+
+/// Watch for an essential container to exit. Returns when the container stops.
+///
+/// Intended to be spawned via `tokio::spawn` and combined with `tokio::select!`
+/// alongside Ctrl+C signal handling.
+#[allow(dead_code)]
+pub async fn watch_essential_exit(
+    client: &(impl ContainerRuntime + ?Sized),
+    id: &str,
+    name: &str,
+) -> EssentialExit {
+    match client.wait_container(id).await {
+        Ok(result) => EssentialExit {
+            container_name: name.to_string(),
+            exit_code: result.status_code,
+        },
+        Err(e) => {
+            tracing::warn!(container = %name, error = %e, "Error watching essential container");
+            EssentialExit {
+                container_name: name.to_string(),
+                exit_code: -1,
+            }
+        }
+    }
+}
+
 /// Poll `inspect_container` until health status becomes "healthy" or timeout.
 #[allow(dead_code)]
 async fn wait_for_healthy(
@@ -581,5 +613,33 @@ mod tests {
             matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
             "unexpected: {result:?}"
         );
+    }
+
+    // --- Essential container monitoring tests ---
+
+    #[tokio::test]
+    async fn watch_essential_exit_returns_exit_code() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 0 }));
+
+        let result = watch_essential_exit(&mock, "id1", "app").await;
+        assert_eq!(result.container_name, "app");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn watch_essential_exit_with_nonzero_code() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 137 }));
+
+        let result = watch_essential_exit(&mock, "id1", "web").await;
+        assert_eq!(result.container_name, "web");
+        assert_eq!(result.exit_code, 137);
     }
 }
