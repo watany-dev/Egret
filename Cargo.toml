@@ -5,10 +5,14 @@ edition = "2024"
 rust-version = "1.93.0"
 description = "Local ECS task runner - run ECS task definitions locally"
 license = "Apache-2.0"
+repository = "https://github.com/watany-dev/Egret"
+readme = "README.md"
+keywords = ["ecs", "docker", "container", "aws", "local"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -44,3 +48,8 @@ print_stdout = "warn"
 print_stderr = "warn"
 cargo_common_metadata = "allow"
 multiple_crate_versions = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
