@@ -4,8 +4,15 @@
 //! an AWS credential provider endpoint for containers running locally.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json};
+use axum::routing::get;
 use serde::Serialize;
+use tokio::sync::RwLock;
 
 use crate::credentials::AwsCredentials;
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
@@ -195,6 +202,153 @@ pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> Cont
         created_at: now.clone(),
         started_at: now,
     }
+}
+
+/// Type alias for the shared server state.
+#[allow(dead_code)]
+pub type SharedState = Arc<RwLock<ServerState>>;
+
+/// Metadata server handle for lifecycle management.
+#[allow(dead_code)]
+pub struct MetadataServer {
+    /// The port the server is listening on.
+    pub port: u16,
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl MetadataServer {
+    /// Start the metadata server on a random available port.
+    ///
+    /// Returns a handle that can be used to shut down the server.
+    #[allow(dead_code)]
+    pub async fn start(state: SharedState) -> Result<Self, MetadataError> {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0")
+            .await
+            .map_err(MetadataError::Bind)?;
+
+        let port = listener
+            .local_addr()
+            .map_err(MetadataError::Bind)?
+            .port();
+
+        let app = build_router(state);
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    shutdown_rx.await.ok();
+                })
+                .await
+                .ok();
+        });
+
+        tracing::info!(port, "Metadata server started");
+        Ok(Self {
+            port,
+            shutdown_tx,
+            handle,
+        })
+    }
+
+    /// Gracefully shut down the server.
+    #[allow(dead_code)]
+    pub async fn shutdown(self) {
+        self.shutdown_tx.send(()).ok();
+        self.handle.await.ok();
+        tracing::info!("Metadata server stopped");
+    }
+}
+
+/// Update a container's Docker ID after creation.
+#[allow(dead_code)]
+pub async fn update_container_id(state: &SharedState, name: &str, docker_id: &str) {
+    let mut state = state.write().await;
+    state
+        .container_ids
+        .insert(name.to_string(), docker_id.to_string());
+    if let Some(meta) = state.container_metadata.get_mut(name) {
+        meta.docker_id = docker_id.to_string();
+    }
+    // Also update in task_metadata.containers
+    for container in &mut state.task_metadata.containers {
+        if container.name == name {
+            container.docker_id = docker_id.to_string();
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn build_router(state: SharedState) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/credentials", get(credentials_handler))
+        .route("/v4/{container_name}", get(container_metadata_handler))
+        .route(
+            "/v4/{container_name}/task",
+            get(task_metadata_handler),
+        )
+        .route(
+            "/v4/{container_name}/stats",
+            get(stats_not_implemented),
+        )
+        .route(
+            "/v4/{container_name}/task/stats",
+            get(stats_not_implemented),
+        )
+        .with_state(state)
+}
+
+#[allow(dead_code)]
+async fn health_handler() -> StatusCode {
+    StatusCode::OK
+}
+
+#[allow(dead_code)]
+async fn credentials_handler(
+    State(state): State<SharedState>,
+) -> impl IntoResponse {
+    let state = state.read().await;
+    state.credentials.as_ref().map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |creds| (StatusCode::OK, Json(serde_json::to_value(creds).ok())).into_response(),
+    )
+}
+
+#[allow(dead_code)]
+async fn container_metadata_handler(
+    State(state): State<SharedState>,
+    Path(container_name): Path<String>,
+) -> impl IntoResponse {
+    let state = state.read().await;
+    state.container_metadata.get(&container_name).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |meta| (StatusCode::OK, Json(serde_json::to_value(meta).ok())).into_response(),
+    )
+}
+
+#[allow(dead_code)]
+async fn task_metadata_handler(
+    State(state): State<SharedState>,
+    Path(container_name): Path<String>,
+) -> impl IntoResponse {
+    let state = state.read().await;
+    // Verify container exists
+    if !state.container_metadata.contains_key(&container_name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&state.task_metadata).ok()),
+    )
+        .into_response()
+}
+
+#[allow(dead_code)]
+async fn stats_not_implemented() -> StatusCode {
+    StatusCode::NOT_IMPLEMENTED
 }
 
 #[cfg(test)]
@@ -419,5 +573,182 @@ mod tests {
     fn metadata_error_display() {
         let err = MetadataError::Server("test error".to_string());
         assert_eq!(err.to_string(), "metadata server error: test error");
+    }
+
+    // --- Server integration tests ---
+
+    fn build_test_state(with_credentials: bool) -> SharedState {
+        let task_def = sample_task_def();
+        let task_metadata = build_task_metadata(&task_def);
+        let container_metadata: HashMap<String, ContainerMetadata> = task_def
+            .container_definitions
+            .iter()
+            .map(|def| {
+                (
+                    def.name.clone(),
+                    build_container_metadata(&task_def.family, def),
+                )
+            })
+            .collect();
+
+        let credentials = if with_credentials {
+            Some(AwsCredentials {
+                access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+                secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+                token: Some("session-token".to_string()),
+                expiration: "2026-03-21T01:00:00Z".to_string(),
+                role_arn: None,
+            })
+        } else {
+            None
+        };
+
+        Arc::new(RwLock::new(ServerState {
+            task_metadata,
+            container_metadata,
+            credentials,
+            container_ids: HashMap::new(),
+        }))
+    }
+
+    /// Helper to start a test server and return (port, state).
+    async fn start_test_server(with_credentials: bool) -> (u16, SharedState, MetadataServer) {
+        let state = build_test_state(with_credentials);
+        let server = MetadataServer::start(state.clone())
+            .await
+            .expect("should start");
+        (server.port, state, server)
+    }
+
+    #[tokio::test]
+    async fn server_starts_on_random_port() {
+        let (port, _, server) = start_test_server(true).await;
+        assert_ne!(port, 0);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_returns_200() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/health"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 200);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn container_metadata_endpoint_returns_json() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/web"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 200);
+        let json: serde_json::Value = resp.json().await.expect("should parse json");
+        assert_eq!(json["Name"], "web");
+        assert_eq!(json["DockerName"], "my-app-web");
+        assert_eq!(json["Image"], "nginx:latest");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn container_metadata_has_correct_docker_id() {
+        let (port, state, server) = start_test_server(true).await;
+        update_container_id(&state, "web", "abc123def456").await;
+
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/web"))
+            .await
+            .expect("should connect");
+        let json: serde_json::Value = resp.json().await.expect("should parse");
+        assert_eq!(json["DockerId"], "abc123def456");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn task_metadata_endpoint_returns_json() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/web/task"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 200);
+        let json: serde_json::Value = resp.json().await.expect("should parse json");
+        assert_eq!(json["Family"], "my-app");
+        assert_eq!(json["Cluster"], "egret-local");
+        assert_eq!(json["Containers"].as_array().expect("should be array").len(), 2);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn credentials_endpoint_returns_json() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/credentials"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 200);
+        let json: serde_json::Value = resp.json().await.expect("should parse json");
+        assert_eq!(json["AccessKeyId"], "AKIAIOSFODNN7EXAMPLE");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn credentials_endpoint_returns_404_when_none() {
+        let (port, _, server) = start_test_server(false).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/credentials"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 404);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unknown_container_returns_404() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/nonexistent"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 404);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unknown_container_task_returns_404() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/nonexistent/task"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 404);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn stats_endpoint_returns_501() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/web/stats"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 501);
+
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/v4/web/task/stats"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 501);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn server_shutdown_gracefully() {
+        let (port, _, server) = start_test_server(true).await;
+        // Verify it's running
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/health"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 200);
+
+        // Shutdown
+        server.shutdown().await;
+
+        // After shutdown, connection should fail
+        let result = reqwest::get(format!("http://127.0.0.1:{port}/health")).await;
+        assert!(result.is_err());
     }
 }
