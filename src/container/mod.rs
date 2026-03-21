@@ -53,6 +53,17 @@ pub trait ContainerRuntime: Send + Sync {
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<ContainerInfo>, ContainerError>;
+
+    /// Inspect a container and return its current state.
+    #[allow(dead_code)]
+    async fn inspect_container(
+        &self,
+        id: &str,
+    ) -> Result<ContainerInspection, ContainerError>;
+
+    /// Wait for a container to exit. Returns the exit status code.
+    #[allow(dead_code)]
+    async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError>;
 }
 
 /// Egret container runtime client wrapping bollard.
@@ -113,6 +124,32 @@ pub struct NetworkInfo {
     #[allow(dead_code)]
     pub id: String,
     pub name: String,
+}
+
+/// Result of inspecting a container.
+#[allow(dead_code)]
+pub struct ContainerInspection {
+    pub id: String,
+    pub state: ContainerState,
+}
+
+/// Container state from inspection.
+#[allow(dead_code)]
+pub struct ContainerState {
+    /// Status string (e.g., "running", "exited").
+    pub status: String,
+    /// Whether the container is running.
+    pub running: bool,
+    /// Exit code (if exited).
+    pub exit_code: Option<i64>,
+    /// Health check status (e.g., "healthy", "unhealthy", "starting").
+    pub health_status: Option<String>,
+}
+
+/// Result of waiting for a container to exit.
+#[allow(dead_code)]
+pub struct WaitResult {
+    pub status_code: i64,
 }
 
 /// Host URL scheme classification.
@@ -374,6 +411,43 @@ impl ContainerRuntime for ContainerClient {
             })
             .collect())
     }
+
+    async fn inspect_container(
+        &self,
+        id: &str,
+    ) -> Result<ContainerInspection, ContainerError> {
+        let resp = self.docker.inspect_container(id, None).await?;
+        let state = resp.state.as_ref();
+
+        Ok(ContainerInspection {
+            id: resp.id.unwrap_or_default(),
+            state: ContainerState {
+                status: state
+                    .and_then(|s| s.status.as_ref())
+                    .map(|s| format!("{s:?}").to_lowercase())
+                    .unwrap_or_default(),
+                running: state.and_then(|s| s.running).unwrap_or(false),
+                exit_code: state.and_then(|s| s.exit_code),
+                health_status: state
+                    .and_then(|s| s.health.as_ref())
+                    .and_then(|h| h.status.as_ref())
+                    .map(|s| format!("{s:?}").to_lowercase()),
+            },
+        })
+    }
+
+    async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError> {
+        let response = self
+            .docker
+            .wait_container::<String>(id, None)
+            .next()
+            .await
+            .ok_or(ContainerError::RuntimeNotRunning)?
+            .map_err(ContainerError::from)?;
+        Ok(WaitResult {
+            status_code: response.status_code,
+        })
+    }
 }
 
 /// Build a bollard container `Config` from an Egret `ContainerConfig`.
@@ -476,6 +550,11 @@ pub mod test_support {
         pub remove_network_results: Mutex<VecDeque<Result<(), ContainerError>>>,
         pub list_containers_results: Mutex<VecDeque<Result<Vec<ContainerInfo>, ContainerError>>>,
         pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, ContainerError>>>,
+        #[allow(dead_code)]
+        pub inspect_container_results:
+            Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
+        #[allow(dead_code)]
+        pub wait_container_results: Mutex<VecDeque<Result<WaitResult, ContainerError>>>,
     }
 
     impl MockContainerClient {
@@ -489,6 +568,8 @@ pub mod test_support {
                 remove_network_results: Mutex::new(VecDeque::new()),
                 list_containers_results: Mutex::new(VecDeque::new()),
                 list_networks_results: Mutex::new(VecDeque::new()),
+                inspect_container_results: Mutex::new(VecDeque::new()),
+                wait_container_results: Mutex::new(VecDeque::new()),
             }
         }
     }
@@ -545,6 +626,17 @@ pub mod test_support {
             _task_filter: Option<&str>,
         ) -> Result<Vec<ContainerInfo>, ContainerError> {
             pop_result(&self.list_containers_results)
+        }
+
+        async fn inspect_container(
+            &self,
+            _id: &str,
+        ) -> Result<ContainerInspection, ContainerError> {
+            pop_result(&self.inspect_container_results)
+        }
+
+        async fn wait_container(&self, _id: &str) -> Result<WaitResult, ContainerError> {
+            pop_result(&self.wait_container_results)
         }
     }
 }
