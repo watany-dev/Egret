@@ -63,6 +63,11 @@ pub struct ContainerDefinition {
     #[serde(default)]
     pub port_mappings: Vec<PortMapping>,
 
+    /// Secrets (Secrets Manager ARN references).
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub secrets: Vec<Secret>,
+
     /// CPU units (1024 = 1 vCPU).
     #[allow(dead_code)]
     pub cpu: Option<u32>,
@@ -104,6 +109,18 @@ pub struct PortMapping {
 
 fn default_protocol() -> String {
     "tcp".to_string()
+}
+
+/// Secret reference (Secrets Manager ARN).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Secret {
+    /// Environment variable name to inject.
+    #[allow(dead_code)]
+    pub name: String,
+    /// ARN of the secret in Secrets Manager.
+    #[allow(dead_code)]
+    pub value_from: String,
 }
 
 impl TaskDefinition {
@@ -357,6 +374,42 @@ mod tests {
         let pm = &task_def.container_definitions[0].port_mappings[0];
         assert_eq!(pm.protocol, "tcp");
         assert_eq!(pm.host_port, None);
+    }
+
+    #[test]
+    fn parse_secrets_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "secrets": [
+                        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:db-pass" },
+                        { "name": "API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:api-key" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let secrets = &task_def.container_definitions[0].secrets;
+        assert_eq!(secrets.len(), 2);
+        assert_eq!(secrets[0].name, "DB_PASSWORD");
+        assert_eq!(
+            secrets[0].value_from,
+            "arn:aws:secretsmanager:us-east-1:123:secret:db-pass"
+        );
+        assert_eq!(secrets[1].name, "API_KEY");
+        assert_eq!(
+            secrets[1].value_from,
+            "arn:aws:secretsmanager:us-east-1:123:secret:api-key"
+        );
+    }
+
+    #[test]
+    fn parse_secrets_empty_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.container_definitions[0].secrets.is_empty());
     }
 
     #[test]
