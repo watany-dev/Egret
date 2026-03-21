@@ -88,6 +88,16 @@ pub struct ContainerDefinition {
     /// Soft memory limit (MiB).
     #[allow(dead_code)]
     pub memory_reservation: Option<u32>,
+
+    /// Container dependencies (startup ordering).
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub depends_on: Vec<DependsOn>,
+
+    /// Health check configuration.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub health_check: Option<HealthCheck>,
 }
 
 const fn default_essential() -> bool {
@@ -128,6 +138,68 @@ pub struct Secret {
     pub name: String,
     /// ARN of the secret in Secrets Manager.
     pub value_from: String,
+}
+
+/// Dependency condition for `dependsOn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DependencyCondition {
+    /// Container has started (default).
+    Start,
+    /// Container has exited (any exit code).
+    Complete,
+    /// Container has exited with code 0.
+    Success,
+    /// Container's health check reports healthy.
+    Healthy,
+}
+
+/// Container dependency reference.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct DependsOn {
+    /// Name of the container this dependency refers to.
+    pub container_name: String,
+    /// Condition that must be met before starting the dependent container.
+    pub condition: DependencyCondition,
+}
+
+/// Health check configuration (ECS-compatible, seconds).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct HealthCheck {
+    /// Health check command (e.g. `["CMD-SHELL", "curl -f http://localhost/"]`).
+    pub command: Vec<String>,
+
+    /// Interval between health checks in seconds (default: 30).
+    #[serde(default = "default_health_interval")]
+    pub interval: u32,
+
+    /// Timeout for each health check in seconds (default: 5).
+    #[serde(default = "default_health_timeout")]
+    pub timeout: u32,
+
+    /// Number of consecutive failures before marking unhealthy (default: 3).
+    #[serde(default = "default_health_retries")]
+    pub retries: u32,
+
+    /// Grace period before health checks start in seconds (default: 0).
+    #[serde(default)]
+    pub start_period: u32,
+}
+
+const fn default_health_interval() -> u32 {
+    30
+}
+
+const fn default_health_timeout() -> u32 {
+    5
+}
+
+const fn default_health_retries() -> u32 {
+    3
 }
 
 impl TaskDefinition {
@@ -455,5 +527,131 @@ mod tests {
             matches!(err, TaskDefError::ReadFile { .. }),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_depends_on_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "db",
+                    "image": "postgres:16",
+                    "healthCheck": {
+                        "command": ["CMD-SHELL", "pg_isready"]
+                    }
+                },
+                {
+                    "name": "app",
+                    "image": "my-app:latest",
+                    "dependsOn": [
+                        { "containerName": "db", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let app = &task_def.container_definitions[1];
+        assert_eq!(app.depends_on.len(), 1);
+        assert_eq!(app.depends_on[0].container_name, "db");
+        assert_eq!(app.depends_on[0].condition, DependencyCondition::Healthy);
+    }
+
+    #[test]
+    fn parse_depends_on_empty_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.container_definitions[0].depends_on.is_empty());
+    }
+
+    #[test]
+    fn parse_health_check_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": {
+                        "command": ["CMD-SHELL", "curl -f http://localhost/"],
+                        "interval": 10,
+                        "timeout": 3,
+                        "retries": 5,
+                        "startPeriod": 15
+                    }
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let hc = task_def.container_definitions[0]
+            .health_check
+            .as_ref()
+            .expect("should have health check");
+        assert_eq!(hc.command, vec!["CMD-SHELL", "curl -f http://localhost/"]);
+        assert_eq!(hc.interval, 10);
+        assert_eq!(hc.timeout, 3);
+        assert_eq!(hc.retries, 5);
+        assert_eq!(hc.start_period, 15);
+    }
+
+    #[test]
+    fn parse_health_check_defaults() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": {
+                        "command": ["CMD-SHELL", "true"]
+                    }
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let hc = task_def.container_definitions[0]
+            .health_check
+            .as_ref()
+            .expect("should have health check");
+        assert_eq!(hc.command, vec!["CMD-SHELL", "true"]);
+        assert_eq!(hc.interval, 30);
+        assert_eq!(hc.timeout, 5);
+        assert_eq!(hc.retries, 3);
+        assert_eq!(hc.start_period, 0);
+    }
+
+    #[test]
+    fn parse_health_check_none_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.container_definitions[0].health_check.is_none());
+    }
+
+    #[test]
+    fn parse_dependency_condition_variants() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "a", "image": "alpine:latest" },
+                { "name": "b", "image": "alpine:latest" },
+                { "name": "c", "image": "alpine:latest" },
+                { "name": "d", "image": "alpine:latest" },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "a", "condition": "START" },
+                        { "containerName": "b", "condition": "COMPLETE" },
+                        { "containerName": "c", "condition": "SUCCESS" },
+                        { "containerName": "d", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let deps = &task_def.container_definitions[4].depends_on;
+        assert_eq!(deps.len(), 4);
+        assert_eq!(deps[0].condition, DependencyCondition::Start);
+        assert_eq!(deps[1].condition, DependencyCondition::Complete);
+        assert_eq!(deps[2].condition, DependencyCondition::Success);
+        assert_eq!(deps[3].condition, DependencyCondition::Healthy);
     }
 }

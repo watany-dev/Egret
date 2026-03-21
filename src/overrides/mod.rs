@@ -136,6 +136,8 @@ mod tests {
                 cpu: None,
                 memory: None,
                 memory_reservation: None,
+                depends_on: vec![],
+                health_check: None,
             }],
         }
     }

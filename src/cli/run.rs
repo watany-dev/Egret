@@ -296,6 +296,8 @@ mod tests {
                 cpu: None,
                 memory: None,
                 memory_reservation: None,
+                depends_on: vec![],
+                health_check: None,
             }],
         }
     }
@@ -318,6 +320,8 @@ mod tests {
                     cpu: None,
                     memory: None,
                     memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
                 },
                 ContainerDefinition {
                     name: "sidecar".to_string(),
@@ -331,6 +335,8 @@ mod tests {
                     cpu: None,
                     memory: None,
                     memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
                 },
             ],
         }
@@ -474,6 +480,8 @@ mod tests {
             cpu: Some(256),
             memory: Some(512),
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let config = build_container_config("my-app", &def, "egret-my-app", None);
@@ -512,6 +520,8 @@ mod tests {
             cpu: None,
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let config = build_container_config("test", &def, "egret-test", None);
@@ -535,6 +545,8 @@ mod tests {
             cpu: None,
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let config = build_container_config("test", &def, "egret-test", None);
@@ -558,6 +570,8 @@ mod tests {
             cpu: None,
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let config = build_container_config("test", &def, "egret-test", None);
@@ -582,6 +596,8 @@ mod tests {
             cpu: None,
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let config = build_container_config("test", &def, "egret-test", Some(12345));
@@ -611,6 +627,8 @@ mod tests {
             cpu: None,
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let config = build_container_config("test", &def, "egret-test", None);

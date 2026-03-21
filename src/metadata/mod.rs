@@ -362,6 +362,8 @@ mod tests {
                     cpu: Some(256),
                     memory: Some(512),
                     memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
                 },
                 ContainerDefinition {
                     name: "sidecar".to_string(),
@@ -375,6 +377,8 @@ mod tests {
                     cpu: None,
                     memory: None,
                     memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
                 },
             ],
         }
@@ -418,6 +422,8 @@ mod tests {
             cpu: Some(256),
             memory: Some(512),
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let meta = build_container_metadata("my-app", &def);
@@ -475,6 +481,8 @@ mod tests {
             cpu: Some(256),
             memory: Some(512),
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let meta = build_container_metadata("test", &def);
@@ -497,6 +505,8 @@ mod tests {
             cpu: None,
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let meta = build_container_metadata("test", &def);
@@ -525,6 +535,8 @@ mod tests {
                 cpu: None,
                 memory: None,
                 memory_reservation: None,
+                depends_on: vec![],
+                health_check: None,
             }],
         };
 
@@ -550,6 +562,8 @@ mod tests {
             cpu: Some(256),
             memory: None,
             memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
         };
 
         let meta = build_container_metadata("test", &def);
