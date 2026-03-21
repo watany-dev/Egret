@@ -71,6 +71,8 @@ pub struct ContainerConfig {
     pub network: String,
     pub network_aliases: Vec<String>,
     pub labels: HashMap<String, String>,
+    /// Extra host-to-IP mappings (e.g., `host.docker.internal:host-gateway`).
+    pub extra_hosts: Vec<String>,
 }
 
 /// Port mapping configuration.
@@ -387,8 +389,15 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
     };
 
+    let extra_hosts = if config.extra_hosts.is_empty() {
+        None
+    } else {
+        Some(config.extra_hosts.clone())
+    };
+
     let host_config = HostConfig {
         port_bindings: Some(port_bindings),
+        extra_hosts,
         ..Default::default()
     };
 
@@ -534,6 +543,7 @@ mod tests {
             network: "egret-test".to_string(),
             network_aliases: vec!["app".to_string()],
             labels: HashMap::from([("egret.managed".into(), "true".into())]),
+            extra_hosts: vec![],
         }
     }
 
@@ -560,6 +570,26 @@ mod tests {
     }
 
     #[test]
+    fn build_bollard_config_extra_hosts() {
+        let mut config = sample_config();
+        config.extra_hosts = vec!["host.docker.internal:host-gateway".to_string()];
+        let result = build_bollard_config(&config);
+
+        let host_config = result.host_config.as_ref().expect("host_config");
+        let extra = host_config.extra_hosts.as_ref().expect("extra_hosts");
+        assert_eq!(extra, &["host.docker.internal:host-gateway"]);
+    }
+
+    #[test]
+    fn build_bollard_config_empty_extra_hosts() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+
+        let host_config = result.host_config.as_ref().expect("host_config");
+        assert!(host_config.extra_hosts.is_none());
+    }
+
+    #[test]
     fn build_bollard_config_empty_cmd_and_env() {
         let config = ContainerConfig {
             name: "min".to_string(),
@@ -571,6 +601,7 @@ mod tests {
             network: "net".to_string(),
             network_aliases: vec![],
             labels: HashMap::new(),
+            extra_hosts: vec![],
         };
         let result = build_bollard_config(&config);
 

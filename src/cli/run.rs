@@ -169,6 +169,7 @@ fn build_container_config(
         network: network.into(),
         network_aliases: vec![def.name.clone()],
         labels,
+        extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],
     }
 }
 
@@ -418,6 +419,29 @@ mod tests {
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
         assert_eq!(config.port_mappings[0].container_port, 3000);
+    }
+
+    #[test]
+    fn build_container_config_has_extra_hosts() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+        };
+
+        let config = build_container_config("test", &def, "egret-test");
+        assert_eq!(
+            config.extra_hosts,
+            vec!["host.docker.internal:host-gateway"]
+        );
     }
 
     #[test]
