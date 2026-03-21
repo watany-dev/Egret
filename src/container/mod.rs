@@ -424,6 +424,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::struct_field_names)]
 pub mod test_support {
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -514,6 +515,7 @@ pub mod test_support {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
