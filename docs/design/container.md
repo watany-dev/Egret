@@ -1,22 +1,34 @@
-# Docker クライアント設計書
+# コンテナランタイムクライアント設計書
 
 ## 概要
 
-bollard クレートを通じて Docker Engine API と連携するモジュール。
+bollard クレートを通じて OCI 互換コンテナランタイム（Docker / Podman）と連携するモジュール。
 コンテナ・ネットワークの作成・起動・停止・削除およびログストリームを提供する。
-`src/docker/mod.rs` に実装する。
+`src/container/mod.rs` に実装する。
 
 ## 設計方針
 
 - bollard の API を薄くラップし、Egret 固有のロジック（ラベル管理、命名規則）をカプセル化
 - すべての操作は `async` で提供
-- Docker デーモンへの接続はデフォルトの Unix ソケット（`/var/run/docker.sock`）を使用
+- Docker と Podman の両方をサポート（Podman は Docker 互換 API を提供）
+- ソケット接続は自動検出 + 明示指定の両方に対応
+
+## 準拠する標準
+
+| 標準 | 用途 |
+|------|------|
+| OCI Runtime Specification | コンテナ実行の標準仕様（Docker/Podman 共に準拠） |
+| OCI Image Specification | コンテナイメージの標準仕様 |
+| Docker Engine API | bollard が実装するデファクト標準（Podman も互換 API を提供） |
+| `CONTAINER_HOST` 環境変数 | Podman 標準のソケット指定方法 |
+| `DOCKER_HOST` 環境変数 | Docker 標準のソケット指定方法（bollard が処理） |
+| XDG Base Directory Specification | rootless Podman ソケットパスの `$XDG_RUNTIME_DIR` 準拠 |
 
 ## 技術選定
 
 | 候補 | 判断 | 理由 |
 |------|------|------|
-| `bollard` | **採用** | 純 Rust 実装の Docker Engine API クライアント。async/await 対応。活発にメンテナンスされている |
+| `bollard` | **採用** | 純 Rust 実装の Docker Engine API クライアント。async/await 対応。活発にメンテナンスされている。Podman の Docker 互換 API とも動作する |
 | `docker-api` | 不採用 | bollard より利用者が少なく、API カバレッジも限定的 |
 | `shiplift` | 不採用 | メンテナンスが停滞（最終リリースが古い） |
 | Docker CLI ラップ | 不採用 | プロセス生成のオーバーヘッド、出力パースの脆弱性、エラーハンドリングの困難さ |
@@ -33,9 +45,31 @@ futures-util = "0.3"
 
 bollard `0.18` は本設計書作成時点（2026-03）の最新安定版。Docker Engine API v1.44+ に対応。
 
+## ソケット接続優先順位
+
+コンテナランタイムへの接続は以下の優先順位で試行する:
+
+| 優先度 | ソース | 説明 |
+|--------|--------|------|
+| 1 | `--host` フラグ / `CONTAINER_HOST` 環境変数 | ユーザーの明示指定（clap `env` 属性で読み取り） |
+| 2 | `DOCKER_HOST` 環境変数 | bollard の `connect_with_local_defaults` が処理 |
+| 3 | Docker 標準ソケット | bollard のデフォルト動作（`/var/run/docker.sock` 等） |
+| 4 | Rootless Podman ソケット | `$XDG_RUNTIME_DIR/podman/podman.sock` |
+| 5 | Rootful Podman ソケット | `/run/podman/podman.sock` |
+
+### ホスト URL フォーマット
+
+`--host` フラグは以下の形式を受け付ける:
+
+| 形式 | 例 | 接続方法 |
+|------|-----|----------|
+| `unix://` プレフィックス | `unix:///run/podman/podman.sock` | `Docker::connect_with_unix` |
+| `tcp://` プレフィックス | `tcp://localhost:2375` | `Docker::connect_with_http` |
+| 素パス | `/run/podman/podman.sock` | Unix ソケットとして扱う |
+
 ## ラベル戦略
 
-Egret が管理するリソースを識別するために、Docker ラベルを付与する:
+Egret が管理するリソースを識別するために、OCI ラベルを付与する:
 
 | ラベルキー | 値 | 用途 |
 |---|---|---|
@@ -52,8 +86,8 @@ use std::collections::HashMap;
 
 use bollard::Docker;
 
-/// Egret 用 Docker クライアント
-pub struct DockerClient {
+/// Egret 用コンテナランタイムクライアント
+pub struct ContainerClient {
     docker: Docker,
 }
 
@@ -61,7 +95,7 @@ pub struct DockerClient {
 pub struct ContainerConfig {
     /// コンテナ名（`<family>-<container_name>` 形式）
     pub name: String,
-    /// Docker イメージ
+    /// OCI コンテナイメージ
     pub image: String,
     /// CMD
     pub command: Vec<String>,
@@ -75,7 +109,7 @@ pub struct ContainerConfig {
     pub network: String,
     /// ネットワーク内のエイリアス（コンテナ定義の name）
     pub network_aliases: Vec<String>,
-    /// Docker ラベル
+    /// コンテナラベル
     pub labels: HashMap<String, String>,
 }
 
@@ -88,7 +122,7 @@ pub struct PortMappingConfig {
 
 /// Egret が管理するコンテナの情報
 pub struct ContainerInfo {
-    /// Docker コンテナ ID
+    /// コンテナ ID
     pub id: String,
     /// コンテナ名
     pub name: String,
@@ -100,7 +134,7 @@ pub struct ContainerInfo {
 
 /// Egret が管理するネットワークの情報
 pub struct NetworkInfo {
-    /// Docker ネットワーク ID
+    /// ネットワーク ID
     pub id: String,
     /// ネットワーク名
     pub name: String,
@@ -111,29 +145,31 @@ pub struct NetworkInfo {
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum DockerError {
-    /// Docker デーモンに接続できない
-    #[error("Docker daemon is not running. Please start Docker and try again.")]
-    DaemonNotRunning,
+pub enum ContainerError {
+    /// コンテナランタイムに接続できない
+    #[error("Container runtime is not running. Please start Docker or Podman and try again.")]
+    RuntimeNotRunning,
 
-    /// Docker API エラー（bollard からの伝搬）
-    #[error("Docker API error: {0}")]
+    /// コンテナランタイム API エラー（bollard からの伝搬）
+    #[error("Container runtime API error: {0}")]
     Api(#[from] bollard::errors::Error),
 }
 ```
 
-CLI 層で `DockerError` を `anyhow` に変換して表示する。
-`DaemonNotRunning` はユーザーフレンドリーなメッセージを提供するために分離する。
+CLI 層で `ContainerError` を `anyhow` に変換して表示する。
+`RuntimeNotRunning` はユーザーフレンドリーなメッセージを提供するために分離する。
 
 ## 公開 API
 
 ```rust
 use futures_util::Stream;
 
-impl DockerClient {
-    /// Docker デーモンに接続し、ping で接続確認を行う
-    /// 接続失敗時は DockerError::DaemonNotRunning を返す
-    pub async fn connect() -> Result<Self, DockerError>;
+impl ContainerClient {
+    /// コンテナランタイムに接続し、ping で接続確認を行う
+    /// 接続失敗時は ContainerError::RuntimeNotRunning を返す
+    ///
+    /// host: --host フラグまたは CONTAINER_HOST 環境変数からの値
+    pub async fn connect(host: Option<&str>) -> Result<Self, ContainerError>;
 
     // --- ネットワーク ---
 
@@ -144,17 +180,17 @@ impl DockerClient {
     pub async fn create_network(
         &self,
         family: &str,
-    ) -> Result<String, DockerError>;
+    ) -> Result<String, ContainerError>;
 
     /// ネットワークを削除する
-    pub async fn remove_network(&self, name: &str) -> Result<(), DockerError>;
+    pub async fn remove_network(&self, name: &str) -> Result<(), ContainerError>;
 
     /// Egret が管理するネットワーク一覧を取得する
     /// task_filter: Some(<family>) で特定タスクに絞り込み、None で全て
     pub async fn list_networks(
         &self,
         task_filter: Option<&str>,
-    ) -> Result<Vec<NetworkInfo>, DockerError>;
+    ) -> Result<Vec<NetworkInfo>, ContainerError>;
 
     // --- コンテナ ---
 
@@ -163,23 +199,23 @@ impl DockerClient {
     pub async fn create_container(
         &self,
         config: &ContainerConfig,
-    ) -> Result<String, DockerError>;
+    ) -> Result<String, ContainerError>;
 
     /// コンテナを起動する
-    pub async fn start_container(&self, id: &str) -> Result<(), DockerError>;
+    pub async fn start_container(&self, id: &str) -> Result<(), ContainerError>;
 
     /// コンテナを停止する（タイムアウト: 10秒、超過時は kill）
-    pub async fn stop_container(&self, id: &str) -> Result<(), DockerError>;
+    pub async fn stop_container(&self, id: &str) -> Result<(), ContainerError>;
 
     /// コンテナを削除する
-    pub async fn remove_container(&self, id: &str) -> Result<(), DockerError>;
+    pub async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
 
     /// Egret が管理するコンテナ一覧を取得する
     /// task_filter: Some(<family>) で特定タスクに絞り込み、None で全て
     pub async fn list_containers(
         &self,
         task_filter: Option<&str>,
-    ) -> Result<Vec<ContainerInfo>, DockerError>;
+    ) -> Result<Vec<ContainerInfo>, ContainerError>;
 
     // --- ログ ---
 
@@ -188,7 +224,7 @@ impl DockerClient {
     pub fn stream_logs(
         &self,
         id: &str,
-    ) -> impl Stream<Item = Result<String, DockerError>> + '_;
+    ) -> impl Stream<Item = Result<String, ContainerError>> + '_;
 }
 ```
 
@@ -209,7 +245,7 @@ impl DockerClient {
     host:8080 → app:80
 ```
 
-- Docker bridge ネットワーク内では、コンテナ名がそのまま DNS 名として解決される
+- bridge ネットワーク内では、コンテナ名がそのまま DNS 名として解決される（Docker/Podman 共通）
 - ECS の `awsvpc` ネットワークモードに近い挙動を bridge + DNS で再現
 - コンテナ名は `<family>-<container_name>` 形式（例: `my-app-app`, `my-app-redis`）
 - ネットワーク内のエイリアスとしてコンテナ定義の `name` をそのまま設定（例: `app`, `redis`）
@@ -247,25 +283,26 @@ let networking_config = NetworkingConfig {
 
 ## エラーハンドリング
 
-| エラー状況 | DockerError バリアント | 対応 |
+| エラー状況 | ContainerError バリアント | 対応 |
 |---|---|---|
-| Docker デーモン未起動 | `DaemonNotRunning` | `connect()` で ping 失敗時に検出 |
-| イメージが存在しない | `Api(...)` | Docker がデフォルトで pull を試行 |
-| ポート競合 | `Api(...)` | Docker API エラーをそのまま伝搬 |
+| コンテナランタイム未起動 | `RuntimeNotRunning` | `connect()` で ping 失敗時に検出 |
+| イメージが存在しない | `Api(...)` | ランタイムがデフォルトで pull を試行 |
+| ポート競合 | `Api(...)` | ランタイム API エラーをそのまま伝搬 |
 | ネットワーク既存 | — | `create_network` 内で既存を検出し再利用（エラーにしない） |
-| コンテナ停止タイムアウト | `Api(...)` | 10 秒後に Docker が自動 kill |
+| コンテナ停止タイムアウト | `Api(...)` | 10 秒後にランタイムが自動 kill |
 
 ## テスト戦略
 
-Docker API を直接呼ぶ統合テストは CI 環境に依存するため、Phase 1 では以下のアプローチ:
+コンテナランタイム API を直接呼ぶ統合テストは CI 環境に依存するため、Phase 1 では以下のアプローチ:
 
 1. **`ContainerConfig` のビルドロジック**: `TaskDefinition` → `ContainerConfig` 変換のユニットテスト（`cli/run.rs` 側）
 2. **ラベル・命名規則**: ラベル生成、コンテナ名・ネットワーク名の生成ロジックのユニットテスト
-3. **Docker API 呼び出し**: 手動テスト（Docker が利用可能な環境で `cargo run` による確認）
+3. **ソケット検出ロジック**: `podman_socket_candidates()` と `parse_host_url()` のユニットテスト
+4. **ランタイム API 呼び出し**: 手動テスト（Docker または Podman が利用可能な環境で `cargo run` による確認）
 
 ## Phase 1 での制限事項
 
-- イメージの明示的な pull 制御は未実装（Docker のデフォルト動作に委ねる）
-- コンテナのリソース制限（CPU/メモリ）は設定するが、厳密な enforcement は Docker に委ねる
+- イメージの明示的な pull 制御は未実装（ランタイムのデフォルト動作に委ねる）
+- コンテナのリソース制限（CPU/メモリ）は設定するが、厳密な enforcement はランタイムに委ねる
 - ボリュームマウントは未対応 → Phase 5
 - ヘルスチェック設定は未対応 → Phase 4

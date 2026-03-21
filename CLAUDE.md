@@ -31,7 +31,7 @@ cargo install cargo-deny
 
 - `src/cli/` — CLI commands (clap): run, stop, version
 - `src/taskdef/` — ECS task definition JSON parser and types
-- `src/docker/` — Docker Engine API client (bollard)
+- `src/container/` — OCI container runtime client (bollard, Docker/Podman)
 - `src/orchestrator/` — Container lifecycle and dependsOn DAG
 - `src/metadata/` — ECS metadata endpoint mock (axum)
 - `src/credentials/` — Credential provider mock
@@ -40,7 +40,7 @@ cargo install cargo-deny
 ## Key Dependencies
 
 - `clap` — CLI framework
-- `bollard` — Docker API client
+- `bollard` — Container runtime API client (Docker/Podman)
 - `tokio` — Async runtime
 - `serde`/`serde_json` — JSON handling
 - `axum` — HTTP server for metadata/credentials
