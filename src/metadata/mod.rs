@@ -179,9 +179,7 @@ pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> Cont
         _ => None,
     };
 
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     ContainerMetadata {
         docker_id: String::new(), // Updated after container creation
@@ -227,10 +225,7 @@ impl MetadataServer {
             .await
             .map_err(MetadataError::Bind)?;
 
-        let port = listener
-            .local_addr()
-            .map_err(MetadataError::Bind)?
-            .port();
+        let port = listener.local_addr().map_err(MetadataError::Bind)?.port();
 
         let app = build_router(state);
 
@@ -286,14 +281,8 @@ fn build_router(state: SharedState) -> Router {
         .route("/health", get(health_handler))
         .route("/credentials", get(credentials_handler))
         .route("/v4/{container_name}", get(container_metadata_handler))
-        .route(
-            "/v4/{container_name}/task",
-            get(task_metadata_handler),
-        )
-        .route(
-            "/v4/{container_name}/stats",
-            get(stats_not_implemented),
-        )
+        .route("/v4/{container_name}/task", get(task_metadata_handler))
+        .route("/v4/{container_name}/stats", get(stats_not_implemented))
         .route(
             "/v4/{container_name}/task/stats",
             get(stats_not_implemented),
@@ -307,9 +296,7 @@ async fn health_handler() -> StatusCode {
 }
 
 #[allow(dead_code)]
-async fn credentials_handler(
-    State(state): State<SharedState>,
-) -> impl IntoResponse {
+async fn credentials_handler(State(state): State<SharedState>) -> impl IntoResponse {
     let state = state.read().await;
     state.credentials.as_ref().map_or_else(
         || StatusCode::NOT_FOUND.into_response(),
@@ -674,7 +661,13 @@ mod tests {
         let json: serde_json::Value = resp.json().await.expect("should parse json");
         assert_eq!(json["Family"], "my-app");
         assert_eq!(json["Cluster"], "egret-local");
-        assert_eq!(json["Containers"].as_array().expect("should be array").len(), 2);
+        assert_eq!(
+            json["Containers"]
+                .as_array()
+                .expect("should be array")
+                .len(),
+            2
+        );
         server.shutdown().await;
     }
 

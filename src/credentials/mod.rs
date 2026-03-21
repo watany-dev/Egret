@@ -122,10 +122,7 @@ mod tests {
         );
         assert_eq!(json["Token"], "FwoGZXIv...");
         assert_eq!(json["Expiration"], "2026-03-21T01:00:00Z");
-        assert_eq!(
-            json["RoleArn"],
-            "arn:aws:iam::123456789012:role/my-role"
-        );
+        assert_eq!(json["RoleArn"], "arn:aws:iam::123456789012:role/my-role");
     }
 
     #[test]

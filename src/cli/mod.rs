@@ -43,6 +43,10 @@ pub struct RunArgs {
     /// Path to local secrets mapping file
     #[arg(short, long)]
     pub secrets: Option<PathBuf>,
+
+    /// Disable the ECS metadata/credentials sidecar server
+    #[arg(long)]
+    pub no_metadata: bool,
 }
 
 #[derive(Parser)]
