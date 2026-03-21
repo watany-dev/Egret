@@ -35,6 +35,10 @@ pub struct RunArgs {
     /// Path to local override file
     #[arg(short, long)]
     pub r#override: Option<PathBuf>,
+
+    /// Path to local secrets mapping file
+    #[arg(short, long)]
+    pub secrets: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -66,6 +70,36 @@ mod tests {
             Command::Run(args) => {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
                 assert!(args.r#override.is_none());
+                assert!(args.secrets.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_override_and_secrets() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "run",
+            "-f",
+            "task.json",
+            "--override",
+            "override.json",
+            "--secrets",
+            "secrets.json",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert_eq!(
+                    args.r#override.as_ref().unwrap().to_str(),
+                    Some("override.json")
+                );
+                assert_eq!(
+                    args.secrets.as_ref().unwrap().to_str(),
+                    Some("secrets.json")
+                );
             }
             _ => panic!("expected Run command"),
         }

@@ -3,9 +3,6 @@
 //! Applies local overrides (image tags, environment variables, port mappings)
 //! to a parsed task definition without modifying the original file.
 
-// Used in Phase 2 CLI integration (Iteration 4).
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

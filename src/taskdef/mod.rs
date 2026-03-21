@@ -65,7 +65,6 @@ pub struct ContainerDefinition {
 
     /// Secrets (Secrets Manager ARN references).
     #[serde(default)]
-    #[allow(dead_code)]
     pub secrets: Vec<Secret>,
 
     /// CPU units (1024 = 1 vCPU).
@@ -116,10 +115,8 @@ fn default_protocol() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Secret {
     /// Environment variable name to inject.
-    #[allow(dead_code)]
     pub name: String,
     /// ARN of the secret in Secrets Manager.
-    #[allow(dead_code)]
     pub value_from: String,
 }
 

@@ -3,9 +3,6 @@
 //! Resolves ECS Secrets Manager ARN references to local plaintext values
 //! using a mapping file (`secrets.local.json`).
 
-// Used in Phase 2 CLI integration (Iteration 4).
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
