@@ -19,7 +19,7 @@ Phase 1 のライフサイクルロジックは以下のように配置する:
 `build_container_config` 関数は `src/cli/run.rs` 内のプライベート関数として配置する。
 CLI 層が「TaskDefinition → ContainerConfig」の変換責務を持ち、container モジュールはランタイム API 操作に集中する。
 
-`src/orchestrator/mod.rs` は Phase 1 では**使用しない**。Phase 4 で dependsOn DAG 解決とヘルスチェック監視の責務を担う予定。
+`src/orchestrator/mod.rs` は Phase 4 で dependsOn DAG 解決、ヘルスチェック監視、essential コンテナ監視の責務を担う。`run_task()` は `orchestrate_startup()` に委譲し、DAG ベースでコンテナを起動する。詳細は `phase4-dependson-healthcheck.md` を参照。
 
 ## `main.rs` の変更
 
@@ -86,11 +86,10 @@ egret run -f task-def.json
           │
           ▼
 ┌─────────────────────────────────┐
-│ 4. 各コンテナを作成・起動        │
-│    for each containerDefinition │
-│    ├─ build_container_config()  │
-│    ├─ create_container()        │
-│    └─ start_container()         │
+│ 4. DAG ベースでコンテナ起動      │
+│    orchestrate_startup() で     │
+│    dependsOn の順序に従い       │
+│    レイヤーごとに起動・条件待機  │
 └─────────┬───────────────────────┘
           │
           ▼
@@ -148,7 +147,7 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         Some(port)
     };
 
-    // 3. ネットワーク作成
+    // 3. ネットワーク作成 + DAG ベース起動（Phase 4 で orchestrate_startup に委譲）
     let (network_name, containers) = run_task(&*client, &task_def, metadata_port).await?;
 
     // 4. ログストリーム + シグナル待機
@@ -421,10 +420,14 @@ async fn cleanup(
 | extra_hosts 設定 | ユニットテスト: `host.docker.internal:host-gateway` が含まれる | `src/cli/run.rs` |
 | 全体フロー | 手動テスト: Docker/Podman 環境で `cargo run` | — |
 
-## Phase 1 での制限事項
+## Phase 4 で解消された制限事項
 
-- コンテナの起動順序制御なし（全コンテナを順次起動）→ Phase 4 で dependsOn 対応
-- ヘルスチェック未対応 → Phase 4
-- essential コンテナ停止時の連動停止未対応 → Phase 4
+以下は Phase 1 時点での制限事項であったが、Phase 4 で実装済み:
+- ~~コンテナの起動順序制御なし~~ → `orchestrate_startup()` で dependsOn DAG 解決
+- ~~ヘルスチェック未対応~~ → `HealthCheck` / `HealthCheckConfig` で Docker HEALTHCHECK 設定
+- ~~essential コンテナ停止時の連動停止未対応~~ → `watch_essential_exit()` で監視可能
+
+## 残存する制限事項
+
 - ボリュームマウント未対応 → Phase 5
-- ログの色分けは Phase 5 で実装（Phase 1 ではプレフィックスのみ）
+- ログの色分けは Phase 5 で実装（現在はプレフィックスのみ）

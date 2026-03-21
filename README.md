@@ -50,7 +50,7 @@ make build
 
 ### `egret run`
 
-Parses an ECS task definition JSON file, creates a bridge network, starts all containers, and streams their logs with `[container-name]` prefixes.
+Parses an ECS task definition JSON file, creates a bridge network, starts containers in `dependsOn` DAG order (with health check and condition waiting), and streams their logs with `[container-name]` prefixes.
 
 ```bash
 egret run -f path/to/task-definition.json
@@ -99,11 +99,31 @@ Egret accepts standard ECS task definition JSON. Unsupported fields are silently
   "family": "my-app",
   "containerDefinitions": [
     {
+      "name": "db",
+      "image": "postgres:16",
+      "essential": true,
+      "healthCheck": {
+        "command": ["CMD-SHELL", "pg_isready -U postgres"],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 5,
+        "startPeriod": 30
+      },
+      "environment": [
+        { "name": "POSTGRES_PASSWORD", "value": "dev" }
+      ],
+      "portMappings": [
+        { "containerPort": 5432 }
+      ]
+    },
+    {
       "name": "app",
       "image": "nginx:latest",
       "essential": true,
+      "dependsOn": [
+        { "containerName": "db", "condition": "HEALTHY" }
+      ],
       "command": ["nginx", "-g", "daemon off;"],
-      "entryPoint": ["/docker-entrypoint.sh"],
       "environment": [
         { "name": "PORT", "value": "8080" }
       ],
@@ -112,9 +132,7 @@ Egret accepts standard ECS task definition JSON. Unsupported fields are silently
       ],
       "secrets": [
         { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789:secret:prod/db-password" }
-      ],
-      "cpu": 256,
-      "memory": 512
+      ]
     }
   ]
 }
@@ -150,6 +168,37 @@ Map Secrets Manager ARNs to local plaintext values:
 }
 ```
 
+### Container Dependencies (`dependsOn`)
+
+Egret respects ECS `dependsOn` declarations. Containers are started in topological order, and dependency conditions are enforced between startup layers:
+
+| Condition | Behavior |
+|-----------|----------|
+| `START` | Dependency container has started |
+| `COMPLETE` | Dependency container has exited (any exit code) |
+| `SUCCESS` | Dependency container has exited with code 0 |
+| `HEALTHY` | Dependency container's health check reports healthy |
+
+Cyclic dependencies are detected and reported as errors.
+
+### Health Checks
+
+The `healthCheck` field is translated to a Docker `HEALTHCHECK` configuration:
+
+```json
+{
+  "healthCheck": {
+    "command": ["CMD-SHELL", "curl -f http://localhost/ || exit 1"],
+    "interval": 10,
+    "timeout": 5,
+    "retries": 3,
+    "startPeriod": 30
+  }
+}
+```
+
+When a container depends on another with the `HEALTHY` condition, Egret polls the container's health status until it becomes healthy or times out.
+
 ### ECS Metadata + Credentials
 
 By default, Egret starts a local HTTP server that mocks the ECS metadata and credentials endpoints. Each container receives environment variables pointing to this server:
@@ -180,7 +229,7 @@ src/
 ├── container/           # OCI container runtime client (bollard, Docker/Podman)
 ├── overrides/           # Local override configuration
 ├── secrets/             # Secrets local resolver
-├── orchestrator/        # Container lifecycle & dependsOn DAG (Phase 4)
+├── orchestrator/        # Container lifecycle & dependsOn DAG
 ├── metadata/            # ECS metadata endpoint mock (axum HTTP server)
 └── credentials/         # AWS credential provider (aws-config)
 ```
@@ -222,7 +271,7 @@ make clean      # cargo clean
 - **Phase 2**: Local overrides + secrets resolution ✅
 - **Phase 2.5**: Container runtime compatibility (Docker + Podman) ✅
 - **Phase 3**: Metadata + credentials sidecar ✅
-- **Phase 4**: dependsOn DAG + health checks
+- **Phase 4**: dependsOn DAG + health checks ✅
 - **Phase 5**: Volumes + log coloring + UX improvements
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
