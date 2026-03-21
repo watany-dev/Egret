@@ -13,3 +13,6 @@
 # Coverage artifacts
 tarpaulin-report.html
 tarpaulin-report.json
+
+# Claude Code local settings
+.claude/settings.local.json
