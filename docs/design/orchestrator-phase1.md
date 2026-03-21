@@ -11,13 +11,13 @@ Phase 1 のライフサイクルロジックは以下のように配置する:
 
 | ファイル | 責務 |
 |---------|------|
-| `src/cli/run.rs` | `egret run` のエントリポイント。パース → Docker 接続 → 起動 → ログ → クリーンアップの全体フロー |
+| `src/cli/run.rs` | `egret run` のエントリポイント。パース → ランタイム接続 → 起動 → ログ → クリーンアップの全体フロー |
 | `src/cli/stop.rs` | `egret stop` のエントリポイント。ラベル検索 → 停止 → 削除のフロー |
-| `src/docker/mod.rs` | Docker API 操作のみ（設計書: `docker.md`）|
+| `src/container/mod.rs` | コンテナランタイム API 操作のみ（設計書: `container.md`）|
 | `src/taskdef/mod.rs` | JSON パースのみ（設計書: `taskdef.md`）|
 
 `build_container_config` 関数は `src/cli/run.rs` 内のプライベート関数として配置する。
-CLI 層が「TaskDefinition → ContainerConfig」の変換責務を持ち、docker モジュールは Docker API 操作に集中する。
+CLI 層が「TaskDefinition → ContainerConfig」の変換責務を持ち、container モジュールはランタイム API 操作に集中する。
 
 `src/orchestrator/mod.rs` は Phase 1 では**使用しない**。Phase 4 で dependsOn DAG 解決とヘルスチェック監視の責務を担う予定。
 
@@ -29,7 +29,12 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 mod cli;
-mod docker;
+mod container;
+mod credentials;
+mod metadata;
+mod orchestrator;
+mod overrides;
+mod secrets;
 mod taskdef;
 
 #[tokio::main]
@@ -41,8 +46,8 @@ async fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
     match cli.command {
-        cli::Command::Run(args) => cli::run::execute(&args).await?,
-        cli::Command::Stop(args) => cli::stop::execute(&args).await?,
+        cli::Command::Run(args) => cli::run::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Stop(args) => cli::stop::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Version => cli::version::execute(),
     }
 
@@ -52,8 +57,9 @@ async fn main() -> Result<()> {
 
 変更点:
 - `fn main()` → `#[tokio::main] async fn main() -> Result<()>`
-- `mod taskdef;` と `mod docker;` を追加
-- `cli::run::execute` と `cli::stop::execute` を `.await?` で呼び出し
+- 全モジュール宣言追加（`container`, `credentials`, `metadata`, `orchestrator`, `overrides`, `secrets`, `taskdef`）
+- `cli::run::execute` と `cli::stop::execute` に `host` パラメータを渡す
+- `cli.host.as_deref()` で `Option<String>` → `Option<&str>` 変換
 
 ## `egret run` フロー
 
@@ -68,13 +74,13 @@ egret run -f task-def.json
           │
           ▼
 ┌─────────────────────┐
-│ 2. Docker 接続確認   │  DockerClient::connect()
-│                     │  エラー → "Docker daemon is not running" 表示
+│ 2. コンテナランタイム接続確認   │  ContainerClient::connect()
+│                     │  エラー → "Container runtime is not running" 表示
 └─────────┬───────────┘
           │
           ▼
 ┌─────────────────────┐
-│ 3. ネットワーク作成  │  DockerClient::create_network()
+│ 3. ネットワーク作成  │  ContainerClient::create_network()
 │    egret-<family>    │
 └─────────┬───────────┘
           │
@@ -110,16 +116,18 @@ use anyhow::Result;
 use futures_util::StreamExt;
 
 use super::RunArgs;
-use crate::docker::{ContainerConfig, DockerClient, PortMappingConfig};
+use crate::container::{ContainerConfig, ContainerClient, PortMappingConfig};
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
-pub async fn execute(args: &RunArgs) -> Result<()> {
+pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     // 1. パース
     let task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, "Parsed task definition");
 
-    // 2. Docker 接続
-    let client = Arc::new(DockerClient::connect().await?);
+    // 1.5. Override 適用 + Secrets 解決（Phase 2 で追加）
+
+    // 2. コンテナランタイム接続
+    let client = Arc::new(ContainerClient::connect(host).await?);
 
     // 3. ネットワーク作成
     let network_name = client.create_network(&task_def.family).await?;
@@ -209,14 +217,14 @@ fn build_container_config(
 
 ### 所有権とライフタイム
 
-`tokio::spawn` は `'static` ライフタイムを要求するため、`DockerClient` を `Arc` で共有する:
+`tokio::spawn` は `'static` ライフタイムを要求するため、`ContainerClient` を `Arc` で共有する:
 
 ```rust
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 async fn stream_logs_until_signal(
-    client: &Arc<DockerClient>,
+    client: &Arc<ContainerClient>,
     containers: &[(String, String)], // (id, name)
 ) {
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -262,7 +270,7 @@ egret stop [<task>] [--all]
          │
          ▼
 ┌──────────────────────────┐
-│ 1. Docker 接続確認        │
+│ 1. コンテナランタイム接続確認        │
 └─────────┬────────────────┘
           │
           ▼
@@ -295,10 +303,10 @@ egret stop [<task>] [--all]
 use anyhow::Result;
 
 use super::StopArgs;
-use crate::docker::DockerClient;
+use crate::container::ContainerClient;
 
-pub async fn execute(args: &StopArgs) -> Result<()> {
-    let client = DockerClient::connect().await?;
+pub async fn execute(args: &StopArgs, host: Option<&str>) -> Result<()> {
+    let client = ContainerClient::connect(host).await?;
 
     let task_filter = if args.all {
         None
@@ -361,7 +369,7 @@ pub async fn execute(args: &StopArgs) -> Result<()> {
 
 ```rust
 async fn cleanup(
-    client: &DockerClient,
+    client: &ContainerClient,
     containers: &[(String, String)], // (id, name)
     network: &str,
 ) {
@@ -393,7 +401,7 @@ async fn cleanup(
 | コンテナ名生成 | ユニットテスト: `<family>-<name>` 形式 | `src/cli/run.rs` |
 | 環境変数変換 | ユニットテスト: `KEY=VALUE` 形式への変換 | `src/cli/run.rs` |
 | ポートマッピング変換 | ユニットテスト: host_port デフォルト値の処理 | `src/cli/run.rs` |
-| 全体フロー | 手動テスト: Docker 環境で `cargo run` | — |
+| 全体フロー | 手動テスト: Docker/Podman 環境で `cargo run` | — |
 
 ## Phase 1 での制限事項
 

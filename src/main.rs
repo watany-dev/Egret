@@ -5,8 +5,8 @@
 //! health checks).
 
 mod cli;
+mod container;
 mod credentials;
-mod docker;
 mod metadata;
 mod orchestrator;
 mod overrides;
@@ -26,8 +26,8 @@ async fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
     match cli.command {
-        cli::Command::Run(args) => cli::run::execute(&args).await?,
-        cli::Command::Stop(args) => cli::stop::execute(&args).await?,
+        cli::Command::Run(args) => cli::run::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Stop(args) => cli::stop::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Version => cli::version::execute(),
     }
 

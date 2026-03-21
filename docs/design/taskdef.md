@@ -38,6 +38,9 @@ JSON パーサには `serde` + `serde_json` を使用する。
       "portMappings": [
         { "containerPort": 80, "hostPort": 8080, "protocol": "tcp" }
       ],
+      "secrets": [
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789:secret:prod/db-password" }
+      ],
       "cpu": 256,
       "memory": 512,
       "memoryReservation": 256
@@ -93,6 +96,10 @@ pub struct ContainerDefinition {
     #[serde(default)]
     pub port_mappings: Vec<PortMapping>,
 
+    /// Secrets Manager 参照
+    #[serde(default)]
+    pub secrets: Vec<Secret>,
+
     /// CPU ユニット（1024 = 1 vCPU）
     pub cpu: Option<u32>,
 
@@ -131,6 +138,16 @@ pub struct PortMapping {
 
 fn default_protocol() -> String {
     "tcp".to_string()
+}
+
+/// Secret reference (Secrets Manager ARN).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Secret {
+    /// Environment variable name to inject.
+    pub name: String,
+    /// ARN of the secret in Secrets Manager.
+    pub value_from: String,
 }
 ```
 
@@ -232,11 +249,14 @@ mod tests {
 }
 ```
 
-## Phase 1 での制限事項
+## 実装済みフィールド（Phase 2 で追加）
 
-以下のフィールドは Phase 1 では未対応。後続フェーズで追加予定:
+- `secrets` / `valueFrom` — Phase 2 で実装済み（`Secret` 構造体）
 
-- `secrets` / `valueFrom` → Phase 2
+## 未対応フィールド
+
+以下のフィールドは後続フェーズで追加予定:
+
 - `healthCheck` → Phase 4
 - `dependsOn` → Phase 4
 - `volumes` / `mountPoints` → Phase 5

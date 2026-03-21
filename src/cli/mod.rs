@@ -12,6 +12,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "egret", about = "Run ECS task definitions locally")]
 pub struct Cli {
+    /// Container runtime socket URL (e.g., `unix:///run/podman/podman.sock`)
+    #[arg(long, global = true, env = "CONTAINER_HOST")]
+    pub host: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -104,6 +108,40 @@ mod tests {
             }
             _ => panic!("expected Run command"),
         }
+    }
+
+    #[test]
+    fn parse_run_with_host_flag() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "--host",
+            "unix:///run/podman/podman.sock",
+            "run",
+            "-f",
+            "task.json",
+        ])
+        .expect("should parse");
+        assert_eq!(cli.host.as_deref(), Some("unix:///run/podman/podman.sock"));
+    }
+
+    #[test]
+    fn parse_host_flag_is_optional() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        assert!(cli.host.is_none());
+    }
+
+    #[test]
+    fn parse_host_with_tcp() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "--host",
+            "tcp://localhost:2375",
+            "run",
+            "-f",
+            "task.json",
+        ])
+        .expect("should parse");
+        assert_eq!(cli.host.as_deref(), Some("tcp://localhost:2375"));
     }
 
     #[test]
