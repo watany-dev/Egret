@@ -17,6 +17,9 @@ egret run -f task-definition.json --override egret-override.json --secrets secre
 # Run with a specific container runtime socket
 egret run -f task-definition.json --host unix:///run/podman/podman.sock
 
+# Run without metadata/credentials sidecar
+egret run -f task-definition.json --no-metadata
+
 # Stop a specific task
 egret stop <family-name>
 
@@ -60,6 +63,7 @@ egret run -f path/to/task-definition.json
 | `-f, --task-definition` | — | Path to ECS task definition JSON (required) |
 | `--override` | — | Path to local override file (`egret-override.json`) |
 | `-s, --secrets` | — | Path to local secrets mapping file (`secrets.local.json`) |
+| `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
 | `--host` | `CONTAINER_HOST` | Container runtime socket URL |
 
 Press `Ctrl+C` to gracefully stop all containers and clean up resources.
@@ -146,6 +150,26 @@ Map Secrets Manager ARNs to local plaintext values:
 }
 ```
 
+### ECS Metadata + Credentials
+
+By default, Egret starts a local HTTP server that mocks the ECS metadata and credentials endpoints. Each container receives environment variables pointing to this server:
+
+- `ECS_CONTAINER_METADATA_URI_V4` — Container and task metadata (ECS v4 format)
+- `AWS_CONTAINER_CREDENTIALS_FULL_URI` — AWS credentials from the local credential chain
+
+The server is accessible from containers via `host.docker.internal`. Available endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /v4/{container_name}` | Container metadata JSON |
+| `GET /v4/{container_name}/task` | Task metadata JSON |
+| `GET /credentials` | AWS credentials (from local credential chain) |
+| `GET /health` | Health check |
+
+Use `--no-metadata` to disable this feature entirely (no server started, no env vars injected).
+
+The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and included in the metadata response.
+
 ## Architecture
 
 ```
@@ -157,8 +181,8 @@ src/
 ├── overrides/           # Local override configuration
 ├── secrets/             # Secrets local resolver
 ├── orchestrator/        # Container lifecycle & dependsOn DAG (Phase 4)
-├── metadata/            # ECS metadata endpoint mock (Phase 3)
-└── credentials/         # Credential provider mock (Phase 3)
+├── metadata/            # ECS metadata endpoint mock (axum HTTP server)
+└── credentials/         # AWS credential provider (aws-config)
 ```
 
 ### Key Dependencies
@@ -169,6 +193,9 @@ src/
 | `bollard` | OCI container runtime API client (Docker/Podman) |
 | `tokio` | Async runtime |
 | `serde` / `serde_json` | JSON handling |
+| `axum` | HTTP server for metadata/credentials endpoints |
+| `aws-config` / `aws-credential-types` | AWS credential chain loading |
+| `chrono` | Date/time handling (credential expiration) |
 | `tracing` | Structured logging |
 | `anyhow` / `thiserror` | Error handling |
 | `futures-util` | Stream processing for container logs |
@@ -183,9 +210,9 @@ make fmt        # cargo fmt
 make fmt-check  # cargo fmt -- --check
 make check      # fmt-check + lint + test + doc + deny (matches CI)
 make coverage   # cargo tarpaulin (95% minimum)
-make audit      # cargo deny check advisories
 make deny       # cargo deny check (advisories + licenses + bans + sources)
 make doc        # cargo doc with -D warnings
+make clean      # cargo clean
 ```
 
 ## Roadmap
@@ -193,7 +220,8 @@ make doc        # cargo doc with -D warnings
 - **Phase 0**: CLI skeleton + dev ecosystem ✅
 - **Phase 1**: Task definition parser + container run/stop ✅
 - **Phase 2**: Local overrides + secrets resolution ✅
-- **Phase 3**: Metadata + credentials sidecar
+- **Phase 2.5**: Container runtime compatibility (Docker + Podman) ✅
+- **Phase 3**: Metadata + credentials sidecar ✅
 - **Phase 4**: dependsOn DAG + health checks
 - **Phase 5**: Volumes + log coloring + UX improvements
 

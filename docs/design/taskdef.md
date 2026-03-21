@@ -25,6 +25,8 @@ JSON パーサには `serde` + `serde_json` を使用する。
 ```json
 {
   "family": "my-app",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/my-task-role",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/my-execution-role",
   "containerDefinitions": [
     {
       "name": "app",
@@ -61,6 +63,14 @@ use std::path::Path;
 pub struct TaskDefinition {
     /// タスクファミリー名（ネットワーク名・ラベルに使用）
     pub family: String,
+
+    /// タスク IAM ロール ARN（Phase 3 で追加）
+    #[serde(default)]
+    pub task_role_arn: Option<String>,
+
+    /// 実行 IAM ロール ARN（Phase 3 で追加）
+    #[serde(default)]
+    pub execution_role_arn: Option<String>,
 
     /// コンテナ定義の配列
     pub container_definitions: Vec<ContainerDefinition>,
@@ -249,9 +259,10 @@ mod tests {
 }
 ```
 
-## 実装済みフィールド（Phase 2 で追加）
+## 実装済みフィールド（後続フェーズで追加）
 
 - `secrets` / `valueFrom` — Phase 2 で実装済み（`Secret` 構造体）
+- `taskRoleArn` / `executionRoleArn` — Phase 3 で実装済み（メタデータレスポンスで使用）
 
 ## 未対応フィールド
 

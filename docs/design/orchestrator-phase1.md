@@ -121,37 +121,41 @@ use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
 pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     // 1. パース
-    let task_def = TaskDefinition::from_file(&args.task_definition)?;
+    let mut task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, "Parsed task definition");
 
-    // 1.5. Override 適用 + Secrets 解決（Phase 2 で追加）
+    // 1.5. Override 適用（Phase 2 で追加）
+    if let Some(override_path) = &args.r#override {
+        let overrides = OverrideConfig::from_file(override_path)?;
+        overrides.apply(&mut task_def);
+    }
+
+    // 1.6. Secrets 解決（Phase 2 で追加）
+    if let Some(secrets_path) = &args.secrets {
+        let resolver = SecretsResolver::from_file(secrets_path)?;
+        // secrets を環境変数に変換
+    }
 
     // 2. コンテナランタイム接続
     let client = Arc::new(ContainerClient::connect(host).await?);
 
+    // 2.5. メタデータサーバー起動（Phase 3 で追加）
+    let metadata_port = if args.no_metadata {
+        None
+    } else {
+        // AWS クレデンシャルロード + MetadataServer::start()
+        // ...
+        Some(port)
+    };
+
     // 3. ネットワーク作成
-    let network_name = client.create_network(&task_def.family).await?;
-    tracing::info!(network = %network_name, "Created network");
+    let (network_name, containers) = run_task(&*client, &task_def, metadata_port).await?;
 
-    // 4. コンテナ作成・起動
-    let mut container_ids = Vec::new();
-    for container_def in &task_def.container_definitions {
-        let config = build_container_config(
-            &task_def.family,
-            container_def,
-            &network_name,
-        );
-        let id = client.create_container(&config).await?;
-        client.start_container(&id).await?;
-        container_ids.push((id, container_def.name.clone()));
-        tracing::info!(container = %container_def.name, "Started container");
-    }
+    // 4. ログストリーム + シグナル待機
+    stream_logs_until_signal(&client, &containers).await;
 
-    // 5. ログストリーム + シグナル待機
-    stream_logs_until_signal(&client, &container_ids).await;
-
-    // 6. クリーンアップ
-    cleanup(&client, &container_ids, &network_name).await;
+    // 5. クリーンアップ（メタデータサーバー + コンテナ）
+    cleanup(&*client, &containers, &network_name).await;
 
     Ok(())
 }
@@ -168,6 +172,7 @@ fn build_container_config(
     family: &str,
     def: &ContainerDefinition,
     network: &str,
+    metadata_port: Option<u16>,  // Phase 3 で追加
 ) -> ContainerConfig {
     let labels = HashMap::from([
         ("egret.managed".into(), "true".into()),
@@ -175,11 +180,21 @@ fn build_container_config(
         ("egret.container".into(), def.name.clone()),
     ]);
 
-    let env = def
+    let mut env: Vec<String> = def
         .environment
         .iter()
         .map(|e| format!("{}={}", e.name, e.value))
         .collect();
+
+    // Phase 3: メタデータ/クレデンシャル環境変数注入
+    if let Some(port) = metadata_port {
+        env.push(format!(
+            "ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:{port}/v4/{}", def.name
+        ));
+        env.push(format!(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://host.docker.internal:{port}/credentials"
+        ));
+    }
 
     let port_mappings = def
         .port_mappings
@@ -201,6 +216,7 @@ fn build_container_config(
         network: network.into(),
         network_aliases: vec![def.name.clone()],
         labels,
+        extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],  // Phase 3
     }
 }
 ```
@@ -401,6 +417,8 @@ async fn cleanup(
 | コンテナ名生成 | ユニットテスト: `<family>-<name>` 形式 | `src/cli/run.rs` |
 | 環境変数変換 | ユニットテスト: `KEY=VALUE` 形式への変換 | `src/cli/run.rs` |
 | ポートマッピング変換 | ユニットテスト: host_port デフォルト値の処理 | `src/cli/run.rs` |
+| メタデータ環境変数注入 | ユニットテスト: metadata_port ありで ECS 環境変数が注入される | `src/cli/run.rs` |
+| extra_hosts 設定 | ユニットテスト: `host.docker.internal:host-gateway` が含まれる | `src/cli/run.rs` |
 | 全体フロー | 手動テスト: Docker/Podman 環境で `cargo run` | — |
 
 ## Phase 1 での制限事項
