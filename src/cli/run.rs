@@ -7,6 +7,11 @@ use tokio::task::JoinHandle;
 
 use super::RunArgs;
 use crate::container::{ContainerClient, ContainerConfig, ContainerRuntime, PortMappingConfig};
+use crate::credentials;
+use crate::metadata::{
+    self, ContainerMetadata, MetadataServer, ServerState, SharedState, build_container_metadata,
+    build_task_metadata,
+};
 use crate::overrides::OverrideConfig;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::{ContainerDefinition, Environment, TaskDefinition};
@@ -48,9 +53,34 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
 
     let client = Arc::new(ContainerClient::connect(host).await?);
 
-    let (network_name, containers) = run_task(&*client, &task_def).await?;
+    // Start metadata server if enabled
+    let (metadata_server, metadata_state) = if args.no_metadata {
+        (None, None)
+    } else {
+        match start_metadata_server(&task_def).await {
+            Ok((server, state)) => (Some(server), Some(state)),
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    };
+
+    let metadata_port = metadata_server.as_ref().map(|s| s.port);
+    let (network_name, containers) = run_task(&*client, &task_def, metadata_port).await?;
+
+    // Update container IDs in metadata server state
+    if let Some(state) = &metadata_state {
+        for (id, name) in &containers {
+            metadata::update_container_id(state, name, id).await;
+        }
+    }
 
     stream_logs_until_signal(&client, &containers).await;
+
+    // Shutdown metadata server
+    if let Some(server) = metadata_server {
+        server.shutdown().await;
+    }
 
     cleanup(&*client, &containers, &network_name).await;
 
@@ -61,13 +91,19 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
 pub async fn run_task(
     client: &(impl ContainerRuntime + ?Sized),
     task_def: &TaskDefinition,
+    metadata_port: Option<u16>,
 ) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
 
     let mut containers = Vec::new();
     for container_def in &task_def.container_definitions {
-        let config = build_container_config(&task_def.family, container_def, &network_name);
+        let config = build_container_config(
+            &task_def.family,
+            container_def,
+            &network_name,
+            metadata_port,
+        );
         let id = client.create_container(&config).await?;
         client.start_container(&id).await?;
         containers.push((id, container_def.name.clone()));
@@ -75,6 +111,52 @@ pub async fn run_task(
     }
 
     Ok((network_name, containers))
+}
+
+/// Start the metadata/credentials sidecar server.
+#[cfg(not(tarpaulin_include))]
+async fn start_metadata_server(task_def: &TaskDefinition) -> Result<(MetadataServer, SharedState)> {
+    // Load AWS credentials (best-effort)
+    let aws_creds = match credentials::load_local_credentials(task_def.task_role_arn.as_deref())
+        .await
+    {
+        Ok(creds) => {
+            tracing::info!("Loaded AWS credentials for metadata server");
+            Some(creds)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Could not load AWS credentials; credential endpoint will return 404");
+            None
+        }
+    };
+
+    let task_metadata = build_task_metadata(task_def);
+    let container_metadata: HashMap<String, ContainerMetadata> = task_def
+        .container_definitions
+        .iter()
+        .map(|def| {
+            (
+                def.name.clone(),
+                build_container_metadata(&task_def.family, def),
+            )
+        })
+        .collect();
+
+    let state = Arc::new(tokio::sync::RwLock::new(ServerState {
+        task_metadata,
+        container_metadata,
+        credentials: aws_creds,
+        container_ids: HashMap::new(),
+    }));
+
+    let server = MetadataServer::start(state.clone()).await?;
+    tracing::info!(
+        port = server.port,
+        "ECS metadata server running on http://0.0.0.0:{}",
+        server.port
+    );
+
+    Ok((server, state))
 }
 
 /// Best-effort cleanup: stop and remove containers, then remove the network.
@@ -136,6 +218,7 @@ fn build_container_config(
     family: &str,
     def: &ContainerDefinition,
     network: &str,
+    metadata_port: Option<u16>,
 ) -> ContainerConfig {
     let labels = HashMap::from([
         ("egret.managed".into(), "true".into()),
@@ -143,11 +226,21 @@ fn build_container_config(
         ("egret.container".into(), def.name.clone()),
     ]);
 
-    let env = def
+    let mut env: Vec<String> = def
         .environment
         .iter()
         .map(|e| format!("{}={}", e.name, e.value))
         .collect();
+
+    if let Some(port) = metadata_port {
+        env.push(format!(
+            "ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:{port}/v4/{}",
+            def.name
+        ));
+        env.push(format!(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://host.docker.internal:{port}/credentials"
+        ));
+    }
 
     let port_mappings = def
         .port_mappings
@@ -169,22 +262,28 @@ fn build_container_config(
         network: network.into(),
         network_aliases: vec![def.name.clone()],
         labels,
+        extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
+    use clap::Parser;
+
     use super::*;
+    use crate::cli::{Cli, Command};
     use crate::container::test_support::MockContainerClient;
     use crate::taskdef::{ContainerDefinition, Environment, PortMapping};
 
     fn single_container_taskdef() -> TaskDefinition {
         TaskDefinition {
             family: "web".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),
@@ -204,6 +303,8 @@ mod tests {
     fn two_container_taskdef() -> TaskDefinition {
         TaskDefinition {
             family: "multi".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
             container_definitions: vec![
                 ContainerDefinition {
                     name: "app".to_string(),
@@ -245,7 +346,9 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let (network, containers) = run_task(&mock, &task_def).await.expect("should succeed");
+        let (network, containers) = run_task(&mock, &task_def, None)
+            .await
+            .expect("should succeed");
 
         assert_eq!(network, "egret-web");
         assert_eq!(containers.len(), 1);
@@ -266,7 +369,9 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let (_, containers) = run_task(&mock, &task_def).await.expect("should succeed");
+        let (_, containers) = run_task(&mock, &task_def, None)
+            .await
+            .expect("should succeed");
 
         assert_eq!(containers.len(), 2);
         assert_eq!(containers[0].1, "app");
@@ -283,7 +388,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let result = run_task(&mock, &task_def).await;
+        let result = run_task(&mock, &task_def, None).await;
         assert!(result.is_err());
     }
 
@@ -300,7 +405,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let result = run_task(&mock, &task_def).await;
+        let result = run_task(&mock, &task_def, None).await;
         assert!(result.is_err());
     }
 
@@ -371,7 +476,7 @@ mod tests {
             memory_reservation: None,
         };
 
-        let config = build_container_config("my-app", &def, "egret-my-app");
+        let config = build_container_config("my-app", &def, "egret-my-app", None);
 
         assert_eq!(config.name, "my-app-app");
         assert_eq!(config.image, "nginx:latest");
@@ -409,11 +514,34 @@ mod tests {
             memory_reservation: None,
         };
 
-        let config = build_container_config("test", &def, "egret-test");
+        let config = build_container_config("test", &def, "egret-test", None);
 
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
         assert_eq!(config.port_mappings[0].container_port, 3000);
+    }
+
+    #[test]
+    fn build_container_config_has_extra_hosts() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+        };
+
+        let config = build_container_config("test", &def, "egret-test", None);
+        assert_eq!(
+            config.extra_hosts,
+            vec!["host.docker.internal:host-gateway"]
+        );
     }
 
     #[test]
@@ -432,11 +560,95 @@ mod tests {
             memory_reservation: None,
         };
 
-        let config = build_container_config("test", &def, "egret-test");
+        let config = build_container_config("test", &def, "egret-test", None);
 
         assert!(config.command.is_empty());
         assert!(config.entry_point.is_empty());
         assert!(config.env.is_empty());
         assert!(config.port_mappings.is_empty());
+    }
+
+    #[test]
+    fn build_container_config_with_metadata_port() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+        };
+
+        let config = build_container_config("test", &def, "egret-test", Some(12345));
+
+        assert!(config.env.contains(
+            &"ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:12345/v4/app".to_string()
+        ));
+        assert!(
+            config.env.contains(
+                &"AWS_CONTAINER_CREDENTIALS_FULL_URI=http://host.docker.internal:12345/credentials"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn build_container_config_without_metadata_port() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+        };
+
+        let config = build_container_config("test", &def, "egret-test", None);
+
+        assert!(
+            !config
+                .env
+                .iter()
+                .any(|e| e.starts_with("ECS_CONTAINER_METADATA_URI_V4="))
+        );
+        assert!(
+            !config
+                .env
+                .iter()
+                .any(|e| e.starts_with("AWS_CONTAINER_CREDENTIALS_FULL_URI="))
+        );
+    }
+
+    #[test]
+    fn parse_run_with_no_metadata_flag() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--no-metadata"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.no_metadata);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_without_no_metadata_flag() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(!args.no_metadata);
+            }
+            _ => panic!("expected Run command"),
+        }
     }
 }

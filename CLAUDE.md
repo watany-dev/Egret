@@ -13,7 +13,6 @@ make lint       # cargo clippy -- -D warnings
 make fmt        # cargo fmt
 make fmt-check  # cargo fmt -- --check
 make coverage   # cargo tarpaulin (95% minimum)
-make audit      # cargo deny check advisories
 make deny       # cargo deny check (advisories + licenses + bans + sources)
 make doc        # cargo doc with -D warnings
 make check      # fmt-check + lint + test + doc + deny (run before push)

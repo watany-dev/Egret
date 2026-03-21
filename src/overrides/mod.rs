@@ -115,6 +115,8 @@ mod tests {
     fn sample_task_def() -> TaskDefinition {
         TaskDefinition {
             family: "test".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),

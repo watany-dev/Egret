@@ -111,6 +111,8 @@ pub struct ContainerConfig {
     pub network_aliases: Vec<String>,
     /// コンテナラベル
     pub labels: HashMap<String, String>,
+    /// 追加ホストエントリ（Phase 3 で追加: `host.docker.internal:host-gateway` 等）
+    pub extra_hosts: Vec<String>,
 }
 
 /// ポートマッピング設定
@@ -262,6 +264,7 @@ fn parse_host_url(url: &str) -> (HostScheme, &str);
 fn podman_socket_candidates() -> Vec<String>;
 
 /// ContainerConfig を bollard の Config に変換する純粋関数
+/// extra_hosts が設定されている場合は HostConfig.extra_hosts に反映する
 fn build_bollard_config(config: &ContainerConfig) -> Config<String>;
 ```
 
@@ -337,7 +340,12 @@ let networking_config = NetworkingConfig {
 3. **ソケット検出ロジック**: `podman_socket_candidates()` と `parse_host_url()` のユニットテスト
 4. **ランタイム API 呼び出し**: 手動テスト（Docker または Podman が利用可能な環境で `cargo run` による確認）
 
-## Phase 1 での制限事項
+## Phase 3 で追加された機能
+
+- `extra_hosts` フィールド: `ContainerConfig` に追加。`build_bollard_config()` で `HostConfig.extra_hosts` に反映
+- メタデータサーバーアクセス用に `host.docker.internal:host-gateway` を全コンテナに設定
+
+## 制限事項
 
 - イメージの明示的な pull 制御は未実装（ランタイムのデフォルト動作に委ねる）
 - コンテナのリソース制限（CPU/メモリ）は設定するが、厳密な enforcement はランタイムに委ねる
