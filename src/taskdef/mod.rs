@@ -142,7 +142,7 @@ pub struct Secret {
 }
 
 /// Dependency condition for `dependsOn`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DependencyCondition {
     /// Container has started (default).

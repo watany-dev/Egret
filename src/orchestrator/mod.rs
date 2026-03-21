@@ -188,6 +188,108 @@ fn format_cycle_path(path: &[&str]) -> String {
         )
 }
 
+/// Container specification for orchestrated startup.
+#[allow(dead_code)]
+pub struct ContainerSpec {
+    pub name: String,
+    pub config: crate::container::ContainerConfig,
+    pub depends_on: Vec<DependsOn>,
+    pub health_check: Option<HealthCheck>,
+    pub essential: bool,
+}
+
+/// Result of orchestrated startup.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct StartupResult {
+    /// Containers that were started: (id, name).
+    pub started: Vec<(String, String)>,
+}
+
+/// Orchestrate container startup following the dependsOn DAG.
+///
+/// 1. Resolve startup order using topological sort
+/// 2. For each layer: create and start containers
+/// 3. Between layers: wait for dependency conditions
+///
+/// On error, returns the partially started containers for cleanup by the caller.
+#[allow(dead_code)]
+pub async fn orchestrate_startup(
+    client: &(impl ContainerRuntime + ?Sized),
+    specs: Vec<ContainerSpec>,
+) -> Result<StartupResult, (StartupResult, OrchestratorError)> {
+    // Build dependency info for DAG resolution
+    let dep_infos: Vec<DependencyInfo> = specs
+        .iter()
+        .map(|s| DependencyInfo {
+            name: s.name.clone(),
+            depends_on: s.depends_on.clone(),
+        })
+        .collect();
+
+    let layers = resolve_start_order(&dep_infos).map_err(|e| {
+        (
+            StartupResult {
+                started: Vec::new(),
+            },
+            e,
+        )
+    })?;
+
+    // Index specs by name
+    let specs_by_name: HashMap<String, &ContainerSpec> =
+        specs.iter().map(|s| (s.name.clone(), s)).collect();
+
+    let mut started: Vec<(String, String)> = Vec::new();
+    let mut id_by_name: HashMap<String, String> = HashMap::new();
+
+    for (layer_idx, layer) in layers.iter().enumerate() {
+        // Start all containers in this layer
+        for name in layer {
+            let spec = specs_by_name[name];
+            let id = client
+                .create_container(&spec.config)
+                .await
+                .map_err(|e| (StartupResult { started: started.clone() }, OrchestratorError::from(e)))?;
+            client
+                .start_container(&id)
+                .await
+                .map_err(|e| (StartupResult { started: started.clone() }, OrchestratorError::from(e)))?;
+            tracing::info!(container = %name, "Started container");
+            started.push((id.clone(), name.clone()));
+            id_by_name.insert(name.clone(), id);
+        }
+
+        // Wait for conditions needed by the next layer
+        if let Some(next_layer) = layers.get(layer_idx + 1) {
+            let mut waited: HashSet<(String, DependencyCondition)> = HashSet::new();
+            for next_name in next_layer {
+                let next_spec = specs_by_name[next_name.as_str()];
+                for dep in &next_spec.depends_on {
+                    if let Some(dep_id) = id_by_name.get(&dep.container_name)
+                        && waited.insert((dep.container_name.clone(), dep.condition))
+                    {
+                        let dep_health_check = specs_by_name
+                            .get(dep.container_name.as_str())
+                            .and_then(|s| s.health_check.as_ref());
+                        wait_for_condition(
+                            client,
+                            dep_id,
+                            &dep.container_name,
+                            dep.condition,
+                            dep_health_check,
+                        )
+                        .await
+                        .map_err(|e| (StartupResult { started: started.clone() }, e))?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(StartupResult { started })
+}
+
 /// Wait for a dependency condition to be met.
 #[allow(dead_code)]
 pub async fn wait_for_condition(
@@ -641,5 +743,149 @@ mod tests {
         let result = watch_essential_exit(&mock, "id1", "web").await;
         assert_eq!(result.container_name, "web");
         assert_eq!(result.exit_code, 137);
+    }
+
+    // --- orchestrate_startup tests ---
+
+    use crate::container::ContainerConfig;
+
+    fn make_spec(name: &str, depends: &[(&str, DependencyCondition)]) -> ContainerSpec {
+        ContainerSpec {
+            name: name.to_string(),
+            config: ContainerConfig {
+                name: format!("test-{name}"),
+                image: "alpine:latest".to_string(),
+                command: vec![],
+                entry_point: vec![],
+                env: vec![],
+                port_mappings: vec![],
+                network: "egret-test".to_string(),
+                network_aliases: vec![name.to_string()],
+                labels: HashMap::new(),
+                extra_hosts: vec![],
+                health_check: None,
+            },
+            depends_on: depends
+                .iter()
+                .map(|(n, c)| DependsOn {
+                    container_name: n.to_string(),
+                    condition: *c,
+                })
+                .collect(),
+            health_check: None,
+            essential: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn orchestrate_startup_no_dependencies() {
+        let mock = MockContainerClient::new();
+        // Two containers, no deps — both in layer 0
+        for name in &["c1", "c2"] {
+            mock.create_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(format!("id-{name}")));
+            mock.start_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(()));
+        }
+
+        let specs = vec![
+            make_spec("a", &[]),
+            make_spec("b", &[]),
+        ];
+        let result = orchestrate_startup(&mock, specs).await.unwrap();
+        assert_eq!(result.started.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn orchestrate_startup_linear_chain() {
+        let mock = MockContainerClient::new();
+        // a -> b (START condition)
+        for name in &["a", "b"] {
+            mock.create_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(format!("id-{name}")));
+            mock.start_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(()));
+        }
+
+        let specs = vec![
+            make_spec("a", &[]),
+            make_spec("b", &[("a", DependencyCondition::Start)]),
+        ];
+        let result = orchestrate_startup(&mock, specs).await.unwrap();
+        assert_eq!(result.started.len(), 2);
+        assert_eq!(result.started[0].1, "a");
+        assert_eq!(result.started[1].1, "b");
+    }
+
+    #[tokio::test]
+    async fn orchestrate_startup_healthy_condition() {
+        let mock = MockContainerClient::new();
+        // db (with healthcheck) -> app (HEALTHY)
+        for name in &["db", "app"] {
+            mock.create_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(format!("id-{name}")));
+            mock.start_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(()));
+        }
+        // Health check poll: healthy immediately
+        mock.inspect_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(ContainerInspection {
+                id: "id-db".into(),
+                state: ContainerState {
+                    status: "running".into(),
+                    running: true,
+                    exit_code: None,
+                    health_status: Some("healthy".into()),
+                },
+            }));
+
+        let mut db_spec = make_spec("db", &[]);
+        db_spec.health_check = Some(HealthCheck {
+            command: vec!["CMD-SHELL".into(), "pg_isready".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 3,
+            start_period: 0,
+        });
+
+        let app_spec = make_spec("app", &[("db", DependencyCondition::Healthy)]);
+
+        tokio::time::pause();
+        let result = orchestrate_startup(&mock, vec![db_spec, app_spec])
+            .await
+            .unwrap();
+        assert_eq!(result.started.len(), 2);
+        assert_eq!(result.started[0].1, "db");
+        assert_eq!(result.started[1].1, "app");
+    }
+
+    #[tokio::test]
+    async fn orchestrate_startup_cycle_detected() {
+        let specs = vec![
+            make_spec("a", &[("b", DependencyCondition::Start)]),
+            make_spec("b", &[("a", DependencyCondition::Start)]),
+        ];
+        let mock = MockContainerClient::new();
+        let err = orchestrate_startup(&mock, specs).await.unwrap_err();
+        assert!(
+            matches!(err.1, OrchestratorError::CyclicDependency(_)),
+            "unexpected: {:?}",
+            err.1
+        );
+        assert!(err.0.started.is_empty());
     }
 }
