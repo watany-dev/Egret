@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage audit deny doc
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc
 
 build:
 	cargo build --release
@@ -7,7 +7,7 @@ test:
 	cargo test
 
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 
 fmt:
 	cargo fmt
@@ -23,11 +23,8 @@ coverage:
 		--timeout 300 \
 		-- --test-threads=1
 
-audit:
-	cargo deny check advisories
-
 deny:
-	cargo deny check licenses bans sources
+	cargo deny check advisories licenses bans sources
 
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
