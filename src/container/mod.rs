@@ -1,4 +1,4 @@
-//! Docker Engine API client integration.
+//! OCI container runtime client integration.
 
 use std::collections::HashMap;
 
@@ -12,51 +12,51 @@ use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
 
-/// Docker client errors.
+/// Container runtime errors.
 #[derive(Debug, thiserror::Error)]
-pub enum DockerError {
-    #[error("Docker daemon is not running. Please start Docker and try again.")]
-    DaemonNotRunning,
+pub enum ContainerError {
+    #[error("Container runtime is not running. Please start Docker or Podman and try again.")]
+    RuntimeNotRunning,
 
-    #[error("Docker API error: {0}")]
+    #[error("Container runtime API error: {0}")]
     Api(#[from] bollard::errors::Error),
 }
 
-/// Abstraction over Docker operations for testability.
-pub trait DockerApi: Send + Sync {
+/// Abstraction over container runtime operations for testability.
+pub trait ContainerRuntime: Send + Sync {
     /// Create an Egret network. Reuses if it already exists.
-    async fn create_network(&self, family: &str) -> Result<String, DockerError>;
+    async fn create_network(&self, family: &str) -> Result<String, ContainerError>;
 
     /// Remove a network by name.
-    async fn remove_network(&self, name: &str) -> Result<(), DockerError>;
+    async fn remove_network(&self, name: &str) -> Result<(), ContainerError>;
 
     /// List Egret-managed networks, optionally filtered by task family.
     async fn list_networks(
         &self,
         task_filter: Option<&str>,
-    ) -> Result<Vec<NetworkInfo>, DockerError>;
+    ) -> Result<Vec<NetworkInfo>, ContainerError>;
 
     /// Create a container (does not start it). Returns the container ID.
-    async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError>;
+    async fn create_container(&self, config: &ContainerConfig) -> Result<String, ContainerError>;
 
     /// Start a container by ID.
-    async fn start_container(&self, id: &str) -> Result<(), DockerError>;
+    async fn start_container(&self, id: &str) -> Result<(), ContainerError>;
 
     /// Stop a container by ID.
-    async fn stop_container(&self, id: &str) -> Result<(), DockerError>;
+    async fn stop_container(&self, id: &str) -> Result<(), ContainerError>;
 
     /// Remove a container by ID.
-    async fn remove_container(&self, id: &str) -> Result<(), DockerError>;
+    async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
 
     /// List Egret-managed containers, optionally filtered by task family.
     async fn list_containers(
         &self,
         task_filter: Option<&str>,
-    ) -> Result<Vec<ContainerInfo>, DockerError>;
+    ) -> Result<Vec<ContainerInfo>, ContainerError>;
 }
 
-/// Egret Docker client wrapping bollard.
-pub struct DockerClient {
+/// Egret container runtime client wrapping bollard.
+pub struct ContainerClient {
     docker: Docker,
 }
 
@@ -98,20 +98,20 @@ pub struct NetworkInfo {
 }
 
 #[cfg(not(tarpaulin_include))]
-impl DockerClient {
-    /// Connect to the Docker daemon and verify with a ping.
-    pub async fn connect() -> Result<Self, DockerError> {
+impl ContainerClient {
+    /// Connect to the container runtime and verify with a ping.
+    pub async fn connect() -> Result<Self, ContainerError> {
         let docker =
-            Docker::connect_with_local_defaults().map_err(|_| DockerError::DaemonNotRunning)?;
+            Docker::connect_with_local_defaults().map_err(|_| ContainerError::RuntimeNotRunning)?;
         docker
             .ping()
             .await
-            .map_err(|_| DockerError::DaemonNotRunning)?;
+            .map_err(|_| ContainerError::RuntimeNotRunning)?;
         Ok(Self { docker })
     }
 
     /// Stream container logs (follow mode).
-    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, DockerError>> + '_ {
+    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, ContainerError>> + '_ {
         self.docker
             .logs(
                 id,
@@ -125,14 +125,14 @@ impl DockerClient {
             .map(|result| {
                 result
                     .map(|output| output.to_string())
-                    .map_err(DockerError::from)
+                    .map_err(ContainerError::from)
             })
     }
 }
 
 #[cfg(not(tarpaulin_include))]
-impl DockerApi for DockerClient {
-    async fn create_network(&self, family: &str) -> Result<String, DockerError> {
+impl ContainerRuntime for ContainerClient {
+    async fn create_network(&self, family: &str) -> Result<String, ContainerError> {
         let name = format!("egret-{family}");
 
         let labels = HashMap::from([("egret.managed", "true"), ("egret.task", family)]);
@@ -163,7 +163,7 @@ impl DockerApi for DockerClient {
         Ok(name)
     }
 
-    async fn remove_network(&self, name: &str) -> Result<(), DockerError> {
+    async fn remove_network(&self, name: &str) -> Result<(), ContainerError> {
         self.docker.remove_network(name).await?;
         Ok(())
     }
@@ -171,7 +171,7 @@ impl DockerApi for DockerClient {
     async fn list_networks(
         &self,
         task_filter: Option<&str>,
-    ) -> Result<Vec<NetworkInfo>, DockerError> {
+    ) -> Result<Vec<NetworkInfo>, ContainerError> {
         let mut label_filters = vec!["egret.managed=true".to_string()];
         if let Some(family) = task_filter {
             label_filters.push(format!("egret.task={family}"));
@@ -195,7 +195,7 @@ impl DockerApi for DockerClient {
             .collect())
     }
 
-    async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError> {
+    async fn create_container(&self, config: &ContainerConfig) -> Result<String, ContainerError> {
         let container_config = build_bollard_config(config);
 
         let response = self
@@ -212,19 +212,19 @@ impl DockerApi for DockerClient {
         Ok(response.id)
     }
 
-    async fn start_container(&self, id: &str) -> Result<(), DockerError> {
+    async fn start_container(&self, id: &str) -> Result<(), ContainerError> {
         self.docker.start_container::<String>(id, None).await?;
         Ok(())
     }
 
-    async fn stop_container(&self, id: &str) -> Result<(), DockerError> {
+    async fn stop_container(&self, id: &str) -> Result<(), ContainerError> {
         self.docker
             .stop_container(id, Some(StopContainerOptions { t: 10 }))
             .await?;
         Ok(())
     }
 
-    async fn remove_container(&self, id: &str) -> Result<(), DockerError> {
+    async fn remove_container(&self, id: &str) -> Result<(), ContainerError> {
         self.docker
             .remove_container(
                 id,
@@ -240,7 +240,7 @@ impl DockerApi for DockerClient {
     async fn list_containers(
         &self,
         task_filter: Option<&str>,
-    ) -> Result<Vec<ContainerInfo>, DockerError> {
+    ) -> Result<Vec<ContainerInfo>, ContainerError> {
         let mut label_filters = vec!["egret.managed=true".to_string()];
         if let Some(family) = task_filter {
             label_filters.push(format!("egret.task={family}"));
@@ -277,8 +277,8 @@ impl DockerApi for DockerClient {
 
 /// Build a bollard container `Config` from an Egret `ContainerConfig`.
 ///
-/// Pure function — no Docker daemon interaction.
-#[allow(clippy::zero_sized_map_values)] // Docker API requires HashMap for exposed_ports
+/// Pure function — no container runtime interaction.
+#[allow(clippy::zero_sized_map_values)] // Container API requires HashMap for exposed_ports
 pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
     let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
     let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
@@ -347,19 +347,19 @@ pub mod test_support {
 
     use super::*;
 
-    /// Mock Docker client for testing CLI orchestration logic.
-    pub struct MockDockerClient {
-        pub create_network_results: Mutex<VecDeque<Result<String, DockerError>>>,
-        pub create_container_results: Mutex<VecDeque<Result<String, DockerError>>>,
-        pub start_container_results: Mutex<VecDeque<Result<(), DockerError>>>,
-        pub stop_container_results: Mutex<VecDeque<Result<(), DockerError>>>,
-        pub remove_container_results: Mutex<VecDeque<Result<(), DockerError>>>,
-        pub remove_network_results: Mutex<VecDeque<Result<(), DockerError>>>,
-        pub list_containers_results: Mutex<VecDeque<Result<Vec<ContainerInfo>, DockerError>>>,
-        pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, DockerError>>>,
+    /// Mock container runtime client for testing.
+    pub struct MockContainerClient {
+        pub create_network_results: Mutex<VecDeque<Result<String, ContainerError>>>,
+        pub create_container_results: Mutex<VecDeque<Result<String, ContainerError>>>,
+        pub start_container_results: Mutex<VecDeque<Result<(), ContainerError>>>,
+        pub stop_container_results: Mutex<VecDeque<Result<(), ContainerError>>>,
+        pub remove_container_results: Mutex<VecDeque<Result<(), ContainerError>>>,
+        pub remove_network_results: Mutex<VecDeque<Result<(), ContainerError>>>,
+        pub list_containers_results: Mutex<VecDeque<Result<Vec<ContainerInfo>, ContainerError>>>,
+        pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, ContainerError>>>,
     }
 
-    impl MockDockerClient {
+    impl MockContainerClient {
         pub fn new() -> Self {
             Self {
                 create_network_results: Mutex::new(VecDeque::new()),
@@ -374,52 +374,57 @@ pub mod test_support {
         }
     }
 
-    /// Pop the next result from a `Mutex<VecDeque<Result<T, DockerError>>>`,
-    /// returning `DockerError::DaemonNotRunning` if the queue is empty.
-    fn pop_result<T>(queue: &Mutex<VecDeque<Result<T, DockerError>>>) -> Result<T, DockerError> {
+    /// Pop the next result from a mock queue,
+    /// returning `ContainerError::RuntimeNotRunning` if the queue is empty.
+    fn pop_result<T>(
+        queue: &Mutex<VecDeque<Result<T, ContainerError>>>,
+    ) -> Result<T, ContainerError> {
         queue
             .lock()
             .ok()
             .and_then(|mut q| q.pop_front())
-            .unwrap_or(Err(DockerError::DaemonNotRunning))
+            .unwrap_or(Err(ContainerError::RuntimeNotRunning))
     }
 
-    impl DockerApi for MockDockerClient {
-        async fn create_network(&self, _family: &str) -> Result<String, DockerError> {
+    impl ContainerRuntime for MockContainerClient {
+        async fn create_network(&self, _family: &str) -> Result<String, ContainerError> {
             pop_result(&self.create_network_results)
         }
 
-        async fn remove_network(&self, _name: &str) -> Result<(), DockerError> {
+        async fn remove_network(&self, _name: &str) -> Result<(), ContainerError> {
             pop_result(&self.remove_network_results)
         }
 
         async fn list_networks(
             &self,
             _task_filter: Option<&str>,
-        ) -> Result<Vec<NetworkInfo>, DockerError> {
+        ) -> Result<Vec<NetworkInfo>, ContainerError> {
             pop_result(&self.list_networks_results)
         }
 
-        async fn create_container(&self, _config: &ContainerConfig) -> Result<String, DockerError> {
+        async fn create_container(
+            &self,
+            _config: &ContainerConfig,
+        ) -> Result<String, ContainerError> {
             pop_result(&self.create_container_results)
         }
 
-        async fn start_container(&self, _id: &str) -> Result<(), DockerError> {
+        async fn start_container(&self, _id: &str) -> Result<(), ContainerError> {
             pop_result(&self.start_container_results)
         }
 
-        async fn stop_container(&self, _id: &str) -> Result<(), DockerError> {
+        async fn stop_container(&self, _id: &str) -> Result<(), ContainerError> {
             pop_result(&self.stop_container_results)
         }
 
-        async fn remove_container(&self, _id: &str) -> Result<(), DockerError> {
+        async fn remove_container(&self, _id: &str) -> Result<(), ContainerError> {
             pop_result(&self.remove_container_results)
         }
 
         async fn list_containers(
             &self,
             _task_filter: Option<&str>,
-        ) -> Result<Vec<ContainerInfo>, DockerError> {
+        ) -> Result<Vec<ContainerInfo>, ContainerError> {
             pop_result(&self.list_containers_results)
         }
     }
@@ -524,11 +529,11 @@ mod tests {
     }
 
     #[test]
-    fn docker_error_display() {
-        let err = DockerError::DaemonNotRunning;
+    fn container_error_display() {
+        let err = ContainerError::RuntimeNotRunning;
         assert_eq!(
             err.to_string(),
-            "Docker daemon is not running. Please start Docker and try again."
+            "Container runtime is not running. Please start Docker or Podman and try again."
         );
     }
 }

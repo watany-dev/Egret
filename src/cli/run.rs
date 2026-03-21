@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 
 use super::RunArgs;
-use crate::docker::{ContainerConfig, DockerApi, DockerClient, PortMappingConfig};
+use crate::container::{ContainerClient, ContainerConfig, ContainerRuntime, PortMappingConfig};
 use crate::overrides::OverrideConfig;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::{ContainerDefinition, Environment, TaskDefinition};
@@ -46,7 +46,7 @@ pub async fn execute(args: &RunArgs) -> Result<()> {
         );
     }
 
-    let client = Arc::new(DockerClient::connect().await?);
+    let client = Arc::new(ContainerClient::connect().await?);
 
     let (network_name, containers) = run_task(&*client, &task_def).await?;
 
@@ -59,7 +59,7 @@ pub async fn execute(args: &RunArgs) -> Result<()> {
 
 /// Create the network and start all containers for a task definition.
 pub async fn run_task(
-    client: &(impl DockerApi + ?Sized),
+    client: &(impl ContainerRuntime + ?Sized),
     task_def: &TaskDefinition,
 ) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
@@ -79,7 +79,7 @@ pub async fn run_task(
 
 /// Best-effort cleanup: stop and remove containers, then remove the network.
 pub async fn cleanup(
-    client: &(impl DockerApi + ?Sized),
+    client: &(impl ContainerRuntime + ?Sized),
     containers: &[(String, String)],
     network: &str,
 ) {
@@ -101,7 +101,7 @@ pub async fn cleanup(
 
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
-async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
+async fn stream_logs_until_signal(client: &Arc<ContainerClient>, containers: &[(String, String)]) {
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for (id, name) in containers {
@@ -178,7 +178,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::docker::test_support::MockDockerClient;
+    use crate::container::test_support::MockContainerClient;
     use crate::taskdef::{ContainerDefinition, Environment, PortMapping};
 
     fn single_container_taskdef() -> TaskDefinition {
@@ -236,11 +236,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_task_single_container() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             create_network_results: Mutex::new(VecDeque::from([Ok("egret-web".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([Ok("container-1".to_string())])),
             start_container_results: Mutex::new(VecDeque::from([Ok(())])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let task_def = single_container_taskdef();
@@ -254,14 +254,14 @@ mod tests {
 
     #[tokio::test]
     async fn run_task_multi_container() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             create_network_results: Mutex::new(VecDeque::from([Ok("egret-multi".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([
                 Ok("c1".to_string()),
                 Ok("c2".to_string()),
             ])),
             start_container_results: Mutex::new(VecDeque::from([Ok(()), Ok(())])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let task_def = two_container_taskdef();
@@ -274,11 +274,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_task_network_failure() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             create_network_results: Mutex::new(VecDeque::from([Err(
-                crate::docker::DockerError::DaemonNotRunning,
+                crate::container::ContainerError::RuntimeNotRunning,
             )])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let task_def = single_container_taskdef();
@@ -288,14 +288,14 @@ mod tests {
 
     #[tokio::test]
     async fn run_task_container_create_failure() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             create_network_results: Mutex::new(VecDeque::from([Ok("egret-multi".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([
                 Ok("c1".to_string()),
-                Err(crate::docker::DockerError::DaemonNotRunning),
+                Err(crate::container::ContainerError::RuntimeNotRunning),
             ])),
             start_container_results: Mutex::new(VecDeque::from([Ok(())])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let task_def = two_container_taskdef();
@@ -305,11 +305,11 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_success() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_network_results: Mutex::new(VecDeque::from([Ok(())])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
@@ -319,13 +319,13 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_tolerates_stop_failure() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             stop_container_results: Mutex::new(VecDeque::from([Err(
-                crate::docker::DockerError::DaemonNotRunning,
+                crate::container::ContainerError::RuntimeNotRunning,
             )])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_network_results: Mutex::new(VecDeque::from([Ok(())])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
@@ -334,13 +334,13 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_tolerates_remove_failure() {
-        let mock = MockDockerClient {
+        let mock = MockContainerClient {
             stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_network_results: Mutex::new(VecDeque::from([Err(
-                crate::docker::DockerError::DaemonNotRunning,
+                crate::container::ContainerError::RuntimeNotRunning,
             )])),
-            ..MockDockerClient::new()
+            ..MockContainerClient::new()
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];

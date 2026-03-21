@@ -5,8 +5,8 @@
 //! health checks).
 
 mod cli;
+mod container;
 mod credentials;
-mod docker;
 mod metadata;
 mod orchestrator;
 mod overrides;
