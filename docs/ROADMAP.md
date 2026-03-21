@@ -72,6 +72,15 @@ src/
   - `valueFrom` の ARN → ローカルマッピングファイルから値を引く
   - `secrets.local.json`: `{ "arn:aws:secretsmanager:...": "local-value" }`
 
+### Phase 2.5: コンテナランタイム互換性強化
+**目標**: Docker に加えて Podman をネイティブサポート
+
+- [x] `docker` モジュールを `container` にリネーム（OCI ランタイム非依存の命名）
+- [x] Podman ソケット自動検出（rootless → rootful）
+- [x] `--host` CLI フラグ + `CONTAINER_HOST` 環境変数によるソケット明示指定
+- [x] `unix://` / `tcp://` / 素パスの URL パース対応
+- [x] 設計書の更新（OCI 準拠の記述に統一）
+
 ### Phase 3: Metadata + Credentials Sidecar
 **目標**: `ECS_CONTAINER_METADATA_URI_V4` と `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` が動く
 

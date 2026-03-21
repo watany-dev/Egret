@@ -30,6 +30,11 @@ use tracing_subscriber::EnvFilter;
 
 mod cli;
 mod container;
+mod credentials;
+mod metadata;
+mod orchestrator;
+mod overrides;
+mod secrets;
 mod taskdef;
 
 #[tokio::main]
@@ -41,8 +46,8 @@ async fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
     match cli.command {
-        cli::Command::Run(args) => cli::run::execute(&args).await?,
-        cli::Command::Stop(args) => cli::stop::execute(&args).await?,
+        cli::Command::Run(args) => cli::run::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Stop(args) => cli::stop::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Version => cli::version::execute(),
     }
 
@@ -52,8 +57,9 @@ async fn main() -> Result<()> {
 
 変更点:
 - `fn main()` → `#[tokio::main] async fn main() -> Result<()>`
-- `mod taskdef;` と `mod container;` を追加
-- `cli::run::execute` と `cli::stop::execute` を `.await?` で呼び出し
+- 全モジュール宣言追加（`container`, `credentials`, `metadata`, `orchestrator`, `overrides`, `secrets`, `taskdef`）
+- `cli::run::execute` と `cli::stop::execute` に `host` パラメータを渡す
+- `cli.host.as_deref()` で `Option<String>` → `Option<&str>` 変換
 
 ## `egret run` フロー
 
@@ -113,13 +119,15 @@ use super::RunArgs;
 use crate::container::{ContainerConfig, ContainerClient, PortMappingConfig};
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
-pub async fn execute(args: &RunArgs) -> Result<()> {
+pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     // 1. パース
     let task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, "Parsed task definition");
 
+    // 1.5. Override 適用 + Secrets 解決（Phase 2 で追加）
+
     // 2. コンテナランタイム接続
-    let client = Arc::new(ContainerClient::connect().await?);
+    let client = Arc::new(ContainerClient::connect(host).await?);
 
     // 3. ネットワーク作成
     let network_name = client.create_network(&task_def.family).await?;
@@ -297,8 +305,8 @@ use anyhow::Result;
 use super::StopArgs;
 use crate::container::ContainerClient;
 
-pub async fn execute(args: &StopArgs) -> Result<()> {
-    let client = ContainerClient::connect().await?;
+pub async fn execute(args: &StopArgs, host: Option<&str>) -> Result<()> {
+    let client = ContainerClient::connect(host).await?;
 
     let task_filter = if args.all {
         None

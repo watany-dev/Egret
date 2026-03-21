@@ -161,6 +161,27 @@ CLI 層で `ContainerError` を `anyhow` に変換して表示する。
 
 ## 公開 API
 
+### `ContainerRuntime` トレイト
+
+テスタビリティのため、コンテナランタイム操作を抽象化するトレイトを定義する。
+`ContainerClient` はこのトレイトを実装し、テストでは `MockContainerClient` で差し替える。
+
+```rust
+#[async_trait::async_trait]
+pub trait ContainerRuntime {
+    async fn create_network(&self, family: &str) -> Result<String, ContainerError>;
+    async fn remove_network(&self, name: &str) -> Result<(), ContainerError>;
+    async fn list_networks(&self, task_filter: Option<&str>) -> Result<Vec<NetworkInfo>, ContainerError>;
+    async fn create_container(&self, config: &ContainerConfig) -> Result<String, ContainerError>;
+    async fn start_container(&self, id: &str) -> Result<(), ContainerError>;
+    async fn stop_container(&self, id: &str) -> Result<(), ContainerError>;
+    async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
+    async fn list_containers(&self, task_filter: Option<&str>) -> Result<Vec<ContainerInfo>, ContainerError>;
+}
+```
+
+### `ContainerClient` 実装
+
 ```rust
 use futures_util::Stream;
 
@@ -170,6 +191,9 @@ impl ContainerClient {
     ///
     /// host: --host フラグまたは CONTAINER_HOST 環境変数からの値
     pub async fn connect(host: Option<&str>) -> Result<Self, ContainerError>;
+
+    /// 指定された URL に直接接続する
+    pub async fn connect_to_host(url: &str) -> Result<Self, ContainerError>;
 
     // --- ネットワーク ---
 
@@ -226,6 +250,19 @@ impl ContainerClient {
         id: &str,
     ) -> impl Stream<Item = Result<String, ContainerError>> + '_;
 }
+```
+
+### ヘルパー関数
+
+```rust
+/// ホスト URL を解析し、スキームとパスに分離する
+fn parse_host_url(url: &str) -> (HostScheme, &str);
+
+/// Podman ソケットの候補パスを返す（rootless → rootful の順）
+fn podman_socket_candidates() -> Vec<String>;
+
+/// ContainerConfig を bollard の Config に変換する純粋関数
+fn build_bollard_config(config: &ContainerConfig) -> Config<String>;
 ```
 
 ## ネットワーク設計
