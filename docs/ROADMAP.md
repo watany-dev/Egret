@@ -61,14 +61,14 @@ src/
 - [x] コンテナ名ベースの DNS 解決（Docker ネットワーク内）
 - [x] `egret stop` でクリーンアップ（コンテナ停止 + ネットワーク削除）
 
-### Phase 2: ローカルオーバーライド + Secrets 差し替え
+### Phase 2: ローカルオーバーライド + Secrets 差し替え ✅
 **目標**: 本番 task definition をそのまま使いつつ、ローカル固有の設定を上書き
 
-- [ ] オーバーライドファイル（`egret-override.json`）
+- [x] オーバーライドファイル（`egret-override.json`）
   - 環境変数の追加・上書き
   - イメージタグの差し替え
   - ポートマッピング変更
-- [ ] Secrets 解決
+- [x] Secrets 解決
   - `valueFrom` の ARN → ローカルマッピングファイルから値を引く
   - `secrets.local.json`: `{ "arn:aws:secretsmanager:...": "local-value" }`
 

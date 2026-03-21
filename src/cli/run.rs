@@ -7,14 +7,44 @@ use tokio::task::JoinHandle;
 
 use super::RunArgs;
 use crate::docker::{ContainerConfig, DockerApi, DockerClient, PortMappingConfig};
-use crate::taskdef::{ContainerDefinition, TaskDefinition};
+use crate::overrides::OverrideConfig;
+use crate::secrets::SecretsResolver;
+use crate::taskdef::{ContainerDefinition, Environment, TaskDefinition};
 
 /// Execute the `run` subcommand.
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 pub async fn execute(args: &RunArgs) -> Result<()> {
-    let task_def = TaskDefinition::from_file(&args.task_definition)?;
+    let mut task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
+
+    // Apply overrides if provided
+    if let Some(override_path) = &args.r#override {
+        let override_config = OverrideConfig::from_file(override_path)?;
+        override_config.apply(&mut task_def);
+        tracing::info!("Applied overrides from {}", override_path.display());
+    }
+
+    // Resolve secrets if provided
+    let has_secrets = task_def
+        .container_definitions
+        .iter()
+        .any(|c| !c.secrets.is_empty());
+
+    if let Some(secrets_path) = &args.secrets {
+        let secrets_resolver = SecretsResolver::from_file(secrets_path)?;
+        for container in &mut task_def.container_definitions {
+            let secret_env_vars = secrets_resolver.resolve(&container.secrets)?;
+            for (name, value) in secret_env_vars {
+                container.environment.push(Environment { name, value });
+            }
+        }
+        tracing::info!("Resolved secrets from {}", secrets_path.display());
+    } else if has_secrets {
+        tracing::warn!(
+            "Task definition has secrets but --secrets flag was not provided. Secret values will not be resolved."
+        );
+    }
 
     let client = Arc::new(DockerClient::connect().await?);
 
@@ -163,6 +193,7 @@ mod tests {
                 entry_point: vec![],
                 environment: vec![],
                 port_mappings: vec![],
+                secrets: vec![],
                 cpu: None,
                 memory: None,
                 memory_reservation: None,
@@ -182,6 +213,7 @@ mod tests {
                     entry_point: vec![],
                     environment: vec![],
                     port_mappings: vec![],
+                    secrets: vec![],
                     cpu: None,
                     memory: None,
                     memory_reservation: None,
@@ -194,6 +226,7 @@ mod tests {
                     entry_point: vec![],
                     environment: vec![],
                     port_mappings: vec![],
+                    secrets: vec![],
                     cpu: None,
                     memory: None,
                     memory_reservation: None,
@@ -332,6 +365,7 @@ mod tests {
                 host_port: Some(8080),
                 protocol: "tcp".to_string(),
             }],
+            secrets: vec![],
             cpu: Some(256),
             memory: Some(512),
             memory_reservation: None,
@@ -369,6 +403,7 @@ mod tests {
                 host_port: None,
                 protocol: "tcp".to_string(),
             }],
+            secrets: vec![],
             cpu: None,
             memory: None,
             memory_reservation: None,
@@ -391,6 +426,7 @@ mod tests {
             entry_point: vec![],
             environment: vec![],
             port_mappings: vec![],
+            secrets: vec![],
             cpu: None,
             memory: None,
             memory_reservation: None,

@@ -1,0 +1,14 @@
+{
+  "containerOverrides": {
+    "nginx": {
+      "image": "nginx:1.25-alpine",
+      "environment": {
+        "NGINX_HOST": "my-local-host",
+        "DEBUG": "true"
+      },
+      "portMappings": [
+        { "containerPort": 80, "hostPort": 9090, "protocol": "tcp" }
+      ]
+    }
+  }
+}
