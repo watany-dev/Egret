@@ -5,8 +5,8 @@ use crate::container::{ContainerClient, ContainerRuntime};
 
 /// Execute the `stop` subcommand.
 #[cfg(not(tarpaulin_include))]
-pub async fn execute(args: &StopArgs) -> Result<()> {
-    let client = ContainerClient::connect().await?;
+pub async fn execute(args: &StopArgs, host: Option<&str>) -> Result<()> {
+    let client = ContainerClient::connect(host).await?;
     execute_with_client(args, &client).await
 }
 

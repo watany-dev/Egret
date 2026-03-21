@@ -14,7 +14,7 @@ use crate::taskdef::{ContainerDefinition, Environment, TaskDefinition};
 /// Execute the `run` subcommand.
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
-pub async fn execute(args: &RunArgs) -> Result<()> {
+pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     let mut task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
 
@@ -46,7 +46,7 @@ pub async fn execute(args: &RunArgs) -> Result<()> {
         );
     }
 
-    let client = Arc::new(ContainerClient::connect().await?);
+    let client = Arc::new(ContainerClient::connect(host).await?);
 
     let (network_name, containers) = run_task(&*client, &task_def).await?;
 

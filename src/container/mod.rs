@@ -97,12 +97,95 @@ pub struct NetworkInfo {
     pub name: String,
 }
 
+/// Host URL scheme classification.
+#[derive(Debug, PartialEq, Eq)]
+enum HostScheme {
+    Unix,
+    Tcp,
+}
+
+/// Parse a host URL into its scheme and address.
+///
+/// - `unix:///path` → `(Unix, "/path")`
+/// - `tcp://host:port` → `(Tcp, "host:port")`
+/// - `/path` (bare path) → `(Unix, "/path")`
+fn parse_host_url(url: &str) -> (HostScheme, &str) {
+    url.strip_prefix("unix://").map_or_else(
+        || {
+            url.strip_prefix("tcp://")
+                .map_or((HostScheme::Unix, url), |addr| (HostScheme::Tcp, addr))
+        },
+        |path| (HostScheme::Unix, path),
+    )
+}
+
+/// Return candidate socket paths for Podman runtime connection.
+///
+/// Docker default paths are handled by bollard's `connect_with_local_defaults`.
+fn podman_socket_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    // Rootless Podman (XDG Base Directory Specification)
+    if let Ok(xdg_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        candidates.push(format!("{xdg_dir}/podman/podman.sock"));
+    }
+
+    // Rootful Podman
+    candidates.push("/run/podman/podman.sock".to_string());
+
+    candidates
+}
+
 #[cfg(not(tarpaulin_include))]
 impl ContainerClient {
-    /// Connect to the container runtime and verify with a ping.
-    pub async fn connect() -> Result<Self, ContainerError> {
-        let docker =
-            Docker::connect_with_local_defaults().map_err(|_| ContainerError::RuntimeNotRunning)?;
+    /// Connect to the container runtime.
+    ///
+    /// Priority:
+    /// 1. Explicit host (`--host` flag or `CONTAINER_HOST` env)
+    /// 2. `DOCKER_HOST` env / Docker default sockets (via bollard)
+    /// 3. Podman socket auto-detection (rootless → rootful)
+    pub async fn connect(host: Option<&str>) -> Result<Self, ContainerError> {
+        // 1. Explicit host specified
+        if let Some(url) = host {
+            return Self::connect_to_host(url).await;
+        }
+
+        // 2. Bollard defaults (DOCKER_HOST env, Docker standard sockets)
+        if let Ok(docker) = Docker::connect_with_local_defaults()
+            && docker.ping().await.is_ok()
+        {
+            return Ok(Self { docker });
+        }
+
+        // 3. Podman socket auto-detection
+        for candidate in podman_socket_candidates() {
+            let path = std::path::Path::new(&candidate);
+            if path.exists()
+                && let Ok(docker) =
+                    Docker::connect_with_unix(&candidate, 120, bollard::API_DEFAULT_VERSION)
+                && docker.ping().await.is_ok()
+            {
+                tracing::info!(socket = %candidate, "Connected to container runtime via Podman socket");
+                return Ok(Self { docker });
+            }
+        }
+
+        Err(ContainerError::RuntimeNotRunning)
+    }
+
+    /// Connect to a specific host URL.
+    async fn connect_to_host(url: &str) -> Result<Self, ContainerError> {
+        let docker = match parse_host_url(url) {
+            (HostScheme::Unix, path) => {
+                Docker::connect_with_unix(path, 120, bollard::API_DEFAULT_VERSION)
+                    .map_err(|_| ContainerError::RuntimeNotRunning)?
+            }
+            (HostScheme::Tcp, addr) => {
+                let http_url = format!("http://{addr}");
+                Docker::connect_with_http(&http_url, 120, bollard::API_DEFAULT_VERSION)
+                    .map_err(|_| ContainerError::RuntimeNotRunning)?
+            }
+        };
         docker
             .ping()
             .await
@@ -535,5 +618,41 @@ mod tests {
             err.to_string(),
             "Container runtime is not running. Please start Docker or Podman and try again."
         );
+    }
+
+    #[test]
+    fn podman_socket_candidates_includes_rootful() {
+        let candidates = podman_socket_candidates();
+        assert!(candidates.iter().any(|c| c == "/run/podman/podman.sock"));
+    }
+
+    #[test]
+    fn podman_socket_candidates_rootful_is_last() {
+        let candidates = podman_socket_candidates();
+        assert_eq!(
+            candidates.last().map(String::as_str),
+            Some("/run/podman/podman.sock")
+        );
+    }
+
+    #[test]
+    fn parse_host_url_unix() {
+        let (scheme, path) = parse_host_url("unix:///run/podman/podman.sock");
+        assert_eq!(scheme, HostScheme::Unix);
+        assert_eq!(path, "/run/podman/podman.sock");
+    }
+
+    #[test]
+    fn parse_host_url_tcp() {
+        let (scheme, addr) = parse_host_url("tcp://localhost:2375");
+        assert_eq!(scheme, HostScheme::Tcp);
+        assert_eq!(addr, "localhost:2375");
+    }
+
+    #[test]
+    fn parse_host_url_bare_path() {
+        let (scheme, path) = parse_host_url("/run/podman/podman.sock");
+        assert_eq!(scheme, HostScheme::Unix);
+        assert_eq!(path, "/run/podman/podman.sock");
     }
 }
