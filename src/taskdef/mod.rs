@@ -358,4 +358,13 @@ mod tests {
         assert_eq!(pm.protocol, "tcp");
         assert_eq!(pm.host_port, None);
     }
+
+    #[test]
+    fn from_file_not_found() {
+        let err = TaskDefinition::from_file(Path::new("/nonexistent/task.json")).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::ReadFile { .. }),
+            "unexpected error: {err}"
+        );
+    }
 }

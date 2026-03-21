@@ -6,24 +6,35 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 
 use super::RunArgs;
-use crate::docker::{ContainerConfig, DockerClient, PortMappingConfig};
+use crate::docker::{ContainerConfig, DockerApi, DockerClient, PortMappingConfig};
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
 /// Execute the `run` subcommand.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 pub async fn execute(args: &RunArgs) -> Result<()> {
-    // 1. Parse task definition
     let task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
 
-    // 2. Connect to Docker
     let client = Arc::new(DockerClient::connect().await?);
 
-    // 3. Create network
+    let (network_name, containers) = run_task(&*client, &task_def).await?;
+
+    stream_logs_until_signal(&client, &containers).await;
+
+    cleanup(&*client, &containers, &network_name).await;
+
+    Ok(())
+}
+
+/// Create the network and start all containers for a task definition.
+pub async fn run_task(
+    client: &(impl DockerApi + ?Sized),
+    task_def: &TaskDefinition,
+) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
 
-    // 4. Create and start containers
     let mut containers = Vec::new();
     for container_def in &task_def.container_definitions {
         let config = build_container_config(&task_def.family, container_def, &network_name);
@@ -33,13 +44,62 @@ pub async fn execute(args: &RunArgs) -> Result<()> {
         tracing::info!(container = %container_def.name, "Started container");
     }
 
-    // 5. Stream logs + wait for signal
-    stream_logs_until_signal(&client, &containers).await;
+    Ok((network_name, containers))
+}
 
-    // 6. Cleanup
-    cleanup(&client, &containers, &network_name).await;
+/// Best-effort cleanup: stop and remove containers, then remove the network.
+pub async fn cleanup(
+    client: &(impl DockerApi + ?Sized),
+    containers: &[(String, String)],
+    network: &str,
+) {
+    for (id, name) in containers {
+        if let Err(e) = client.stop_container(id).await {
+            tracing::warn!(container = %name, error = %e, "Failed to stop container");
+        }
+        if let Err(e) = client.remove_container(id).await {
+            tracing::warn!(container = %name, error = %e, "Failed to remove container");
+        }
+        tracing::info!(container = %name, "Cleaned up");
+    }
 
-    Ok(())
+    if let Err(e) = client.remove_network(network).await {
+        tracing::warn!(network = %network, error = %e, "Failed to remove network");
+    }
+    tracing::info!(network = %network, "Network removed");
+}
+
+#[cfg(not(tarpaulin_include))]
+#[allow(clippy::print_stdout)]
+async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    for (id, name) in containers {
+        let client = Arc::clone(client);
+        let id = id.clone();
+        let name = name.clone();
+
+        handles.push(tokio::spawn(async move {
+            let mut stream = client.stream_logs(&id);
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(line) => println!("[{name}] {line}"),
+                    Err(e) => {
+                        tracing::warn!(container = %name, error = %e, "Log stream error");
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c().await.ok();
+    tracing::info!("Received SIGINT, shutting down...");
+
+    for handle in &handles {
+        handle.abort();
+    }
 }
 
 fn build_container_config(
@@ -82,59 +142,177 @@ fn build_container_config(
     }
 }
 
-#[allow(clippy::print_stdout)]
-async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
-
-    for (id, name) in containers {
-        let client = Arc::clone(client);
-        let id = id.clone();
-        let name = name.clone();
-
-        handles.push(tokio::spawn(async move {
-            let mut stream = client.stream_logs(&id);
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(line) => println!("[{name}] {line}"),
-                    Err(e) => {
-                        tracing::warn!(container = %name, error = %e, "Log stream error");
-                        break;
-                    }
-                }
-            }
-        }));
-    }
-
-    // Wait for Ctrl+C
-    tokio::signal::ctrl_c().await.ok();
-    tracing::info!("Received SIGINT, shutting down...");
-
-    for handle in &handles {
-        handle.abort();
-    }
-}
-
-async fn cleanup(client: &DockerClient, containers: &[(String, String)], network: &str) {
-    for (id, name) in containers {
-        if let Err(e) = client.stop_container(id).await {
-            tracing::warn!(container = %name, error = %e, "Failed to stop container");
-        }
-        if let Err(e) = client.remove_container(id).await {
-            tracing::warn!(container = %name, error = %e, "Failed to remove container");
-        }
-        tracing::info!(container = %name, "Cleaned up");
-    }
-
-    if let Err(e) = client.remove_network(network).await {
-        tracing::warn!(network = %network, error = %e, "Failed to remove network");
-    }
-    tracing::info!(network = %network, "Network removed");
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::docker::test_support::MockDockerClient;
     use crate::taskdef::{ContainerDefinition, Environment, PortMapping};
+
+    fn single_container_taskdef() -> TaskDefinition {
+        TaskDefinition {
+            family: "web".to_string(),
+            container_definitions: vec![ContainerDefinition {
+                name: "app".to_string(),
+                image: "nginx:latest".to_string(),
+                essential: true,
+                command: vec![],
+                entry_point: vec![],
+                environment: vec![],
+                port_mappings: vec![],
+                cpu: None,
+                memory: None,
+                memory_reservation: None,
+            }],
+        }
+    }
+
+    fn two_container_taskdef() -> TaskDefinition {
+        TaskDefinition {
+            family: "multi".to_string(),
+            container_definitions: vec![
+                ContainerDefinition {
+                    name: "app".to_string(),
+                    image: "nginx:latest".to_string(),
+                    essential: true,
+                    command: vec![],
+                    entry_point: vec![],
+                    environment: vec![],
+                    port_mappings: vec![],
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: None,
+                },
+                ContainerDefinition {
+                    name: "sidecar".to_string(),
+                    image: "redis:latest".to_string(),
+                    essential: false,
+                    command: vec![],
+                    entry_point: vec![],
+                    environment: vec![],
+                    port_mappings: vec![],
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: None,
+                },
+            ],
+        }
+    }
+
+    #[tokio::test]
+    async fn run_task_single_container() {
+        let mock = MockDockerClient {
+            create_network_results: Mutex::new(VecDeque::from([Ok("egret-web".to_string())])),
+            create_container_results: Mutex::new(VecDeque::from([Ok("container-1".to_string())])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockDockerClient::new()
+        };
+
+        let task_def = single_container_taskdef();
+        let (network, containers) = run_task(&mock, &task_def).await.expect("should succeed");
+
+        assert_eq!(network, "egret-web");
+        assert_eq!(containers.len(), 1);
+        assert_eq!(containers[0].0, "container-1");
+        assert_eq!(containers[0].1, "app");
+    }
+
+    #[tokio::test]
+    async fn run_task_multi_container() {
+        let mock = MockDockerClient {
+            create_network_results: Mutex::new(VecDeque::from([Ok("egret-multi".to_string())])),
+            create_container_results: Mutex::new(VecDeque::from([
+                Ok("c1".to_string()),
+                Ok("c2".to_string()),
+            ])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(()), Ok(())])),
+            ..MockDockerClient::new()
+        };
+
+        let task_def = two_container_taskdef();
+        let (_, containers) = run_task(&mock, &task_def).await.expect("should succeed");
+
+        assert_eq!(containers.len(), 2);
+        assert_eq!(containers[0].1, "app");
+        assert_eq!(containers[1].1, "sidecar");
+    }
+
+    #[tokio::test]
+    async fn run_task_network_failure() {
+        let mock = MockDockerClient {
+            create_network_results: Mutex::new(VecDeque::from([Err(
+                crate::docker::DockerError::DaemonNotRunning,
+            )])),
+            ..MockDockerClient::new()
+        };
+
+        let task_def = single_container_taskdef();
+        let result = run_task(&mock, &task_def).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn run_task_container_create_failure() {
+        let mock = MockDockerClient {
+            create_network_results: Mutex::new(VecDeque::from([Ok("egret-multi".to_string())])),
+            create_container_results: Mutex::new(VecDeque::from([
+                Ok("c1".to_string()),
+                Err(crate::docker::DockerError::DaemonNotRunning),
+            ])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockDockerClient::new()
+        };
+
+        let task_def = two_container_taskdef();
+        let result = run_task(&mock, &task_def).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn cleanup_success() {
+        let mock = MockDockerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_network_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockDockerClient::new()
+        };
+
+        let containers = vec![("c1".to_string(), "app".to_string())];
+        cleanup(&mock, &containers, "egret-test").await;
+        // No panic = success (best-effort cleanup)
+    }
+
+    #[tokio::test]
+    async fn cleanup_tolerates_stop_failure() {
+        let mock = MockDockerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Err(
+                crate::docker::DockerError::DaemonNotRunning,
+            )])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_network_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockDockerClient::new()
+        };
+
+        let containers = vec![("c1".to_string(), "app".to_string())];
+        cleanup(&mock, &containers, "egret-test").await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_tolerates_remove_failure() {
+        let mock = MockDockerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_network_results: Mutex::new(VecDeque::from([Err(
+                crate::docker::DockerError::DaemonNotRunning,
+            )])),
+            ..MockDockerClient::new()
+        };
+
+        let containers = vec![("c1".to_string(), "app".to_string())];
+        cleanup(&mock, &containers, "egret-test").await;
+    }
 
     #[test]
     fn build_container_config_basic() {
