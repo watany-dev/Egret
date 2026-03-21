@@ -400,10 +400,7 @@ pub mod test_support {
             pop_result(&self.list_networks_results)
         }
 
-        async fn create_container(
-            &self,
-            _config: &ContainerConfig,
-        ) -> Result<String, DockerError> {
+        async fn create_container(&self, _config: &ContainerConfig) -> Result<String, DockerError> {
             pop_result(&self.create_container_results)
         }
 
@@ -461,10 +458,7 @@ mod tests {
 
         // Verify port bindings
         let host_config = result.host_config.as_ref().expect("host_config");
-        let bindings = host_config
-            .port_bindings
-            .as_ref()
-            .expect("port_bindings");
+        let bindings = host_config.port_bindings.as_ref().expect("port_bindings");
         let binding = bindings
             .get("80/tcp")
             .expect("80/tcp binding")
@@ -515,7 +509,10 @@ mod tests {
         let config = sample_config();
         let result = build_bollard_config(&config);
 
-        let net_config = result.networking_config.as_ref().expect("networking_config");
+        let net_config = result
+            .networking_config
+            .as_ref()
+            .expect("networking_config");
         let endpoint = net_config
             .endpoints_config
             .get("egret-test")

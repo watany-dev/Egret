@@ -81,9 +81,9 @@ mod tests {
     #[tokio::test]
     async fn stop_specific_task() {
         let mock = MockDockerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                container_info("c1", "web-app"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info(
+                "c1", "web-app",
+            )])])),
             stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
             list_networks_results: Mutex::new(VecDeque::from([Ok(vec![network_info(
@@ -97,7 +97,9 @@ mod tests {
             task: Some("web".to_string()),
             all: false,
         };
-        execute_with_client(&args, &mock).await.expect("should succeed");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed");
     }
 
     #[tokio::test]
@@ -117,7 +119,9 @@ mod tests {
             task: None,
             all: true,
         };
-        execute_with_client(&args, &mock).await.expect("should succeed");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed");
     }
 
     #[tokio::test]
@@ -145,15 +149,17 @@ mod tests {
             task: Some("nonexistent".to_string()),
             all: false,
         };
-        execute_with_client(&args, &mock).await.expect("should succeed");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed");
     }
 
     #[tokio::test]
     async fn stop_tolerates_stop_failure() {
         let mock = MockDockerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                container_info("c1", "app"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info(
+                "c1", "app",
+            )])])),
             stop_container_results: Mutex::new(VecDeque::from([Err(
                 DockerError::DaemonNotRunning,
             )])),
@@ -166,15 +172,17 @@ mod tests {
             task: Some("test".to_string()),
             all: false,
         };
-        execute_with_client(&args, &mock).await.expect("should succeed despite stop failure");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed despite stop failure");
     }
 
     #[tokio::test]
     async fn stop_tolerates_network_remove_failure() {
         let mock = MockDockerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                container_info("c1", "app"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info(
+                "c1", "app",
+            )])])),
             stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
             list_networks_results: Mutex::new(VecDeque::from([Ok(vec![network_info(
@@ -190,6 +198,8 @@ mod tests {
             task: Some("test".to_string()),
             all: false,
         };
-        execute_with_client(&args, &mock).await.expect("should succeed despite network failure");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed despite network failure");
     }
 }

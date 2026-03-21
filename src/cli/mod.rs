@@ -61,8 +61,7 @@ mod tests {
 
     #[test]
     fn parse_run_command() {
-        let cli =
-            Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
