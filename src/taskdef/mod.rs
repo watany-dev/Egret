@@ -30,10 +30,12 @@ pub struct TaskDefinition {
 
     /// IAM role ARN for the task (containers assume this role via credentials).
     #[serde(default)]
+    #[allow(dead_code)]
     pub task_role_arn: Option<String>,
 
     /// IAM role ARN for the execution agent (used for pulling images, etc.).
     #[serde(default)]
+    #[allow(dead_code)]
     pub execution_role_arn: Option<String>,
 
     /// Container definitions.

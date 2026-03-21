@@ -17,6 +17,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bollard = "0.18"
 futures-util = "0.3"
+aws-config = "1"
+aws-credential-types = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [lints.rust]
 unsafe_code = "forbid"
