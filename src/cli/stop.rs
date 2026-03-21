@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::StopArgs;
-use crate::docker::DockerClient;
+use crate::docker::{DockerApi, DockerClient};
 
 /// Execute the `stop` subcommand.
 #[allow(clippy::print_stdout)]

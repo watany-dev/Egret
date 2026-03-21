@@ -21,6 +21,7 @@ futures-util = "0.3"
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

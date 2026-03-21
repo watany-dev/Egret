@@ -22,6 +22,39 @@ pub enum DockerError {
     Api(#[from] bollard::errors::Error),
 }
 
+/// Abstraction over Docker operations for testability.
+pub trait DockerApi: Send + Sync {
+    /// Create an Egret network. Reuses if it already exists.
+    async fn create_network(&self, family: &str) -> Result<String, DockerError>;
+
+    /// Remove a network by name.
+    async fn remove_network(&self, name: &str) -> Result<(), DockerError>;
+
+    /// List Egret-managed networks, optionally filtered by task family.
+    async fn list_networks(
+        &self,
+        task_filter: Option<&str>,
+    ) -> Result<Vec<NetworkInfo>, DockerError>;
+
+    /// Create a container (does not start it). Returns the container ID.
+    async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError>;
+
+    /// Start a container by ID.
+    async fn start_container(&self, id: &str) -> Result<(), DockerError>;
+
+    /// Stop a container by ID.
+    async fn stop_container(&self, id: &str) -> Result<(), DockerError>;
+
+    /// Remove a container by ID.
+    async fn remove_container(&self, id: &str) -> Result<(), DockerError>;
+
+    /// List Egret-managed containers, optionally filtered by task family.
+    async fn list_containers(
+        &self,
+        task_filter: Option<&str>,
+    ) -> Result<Vec<ContainerInfo>, DockerError>;
+}
+
 /// Egret Docker client wrapping bollard.
 pub struct DockerClient {
     docker: Docker,
@@ -64,6 +97,7 @@ pub struct NetworkInfo {
     pub name: String,
 }
 
+#[cfg(not(tarpaulin_include))]
 impl DockerClient {
     /// Connect to the Docker daemon and verify with a ping.
     pub async fn connect() -> Result<Self, DockerError> {
@@ -76,10 +110,29 @@ impl DockerClient {
         Ok(Self { docker })
     }
 
-    // --- Network ---
+    /// Stream container logs (follow mode).
+    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, DockerError>> + '_ {
+        self.docker
+            .logs(
+                id,
+                Some(LogsOptions::<String> {
+                    follow: true,
+                    stdout: true,
+                    stderr: true,
+                    ..Default::default()
+                }),
+            )
+            .map(|result| {
+                result
+                    .map(|output| output.to_string())
+                    .map_err(DockerError::from)
+            })
+    }
+}
 
-    /// Create an Egret network (`egret-<family>`). Reuses if it already exists.
-    pub async fn create_network(&self, family: &str) -> Result<String, DockerError> {
+#[cfg(not(tarpaulin_include))]
+impl DockerApi for DockerClient {
+    async fn create_network(&self, family: &str) -> Result<String, DockerError> {
         let name = format!("egret-{family}");
 
         let labels = HashMap::from([("egret.managed", "true"), ("egret.task", family)]);
@@ -110,14 +163,12 @@ impl DockerClient {
         Ok(name)
     }
 
-    /// Remove a network by name.
-    pub async fn remove_network(&self, name: &str) -> Result<(), DockerError> {
+    async fn remove_network(&self, name: &str) -> Result<(), DockerError> {
         self.docker.remove_network(name).await?;
         Ok(())
     }
 
-    /// List Egret-managed networks, optionally filtered by task family.
-    pub async fn list_networks(
+    async fn list_networks(
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<NetworkInfo>, DockerError> {
@@ -144,10 +195,7 @@ impl DockerClient {
             .collect())
     }
 
-    // --- Container ---
-
-    /// Create a container (does not start it). Returns the container ID.
-    pub async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError> {
+    async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError> {
         let container_config = build_bollard_config(config);
 
         let response = self
@@ -164,22 +212,19 @@ impl DockerClient {
         Ok(response.id)
     }
 
-    /// Start a container by ID.
-    pub async fn start_container(&self, id: &str) -> Result<(), DockerError> {
+    async fn start_container(&self, id: &str) -> Result<(), DockerError> {
         self.docker.start_container::<String>(id, None).await?;
         Ok(())
     }
 
-    /// Stop a container by ID (10 second timeout, then kill).
-    pub async fn stop_container(&self, id: &str) -> Result<(), DockerError> {
+    async fn stop_container(&self, id: &str) -> Result<(), DockerError> {
         self.docker
             .stop_container(id, Some(StopContainerOptions { t: 10 }))
             .await?;
         Ok(())
     }
 
-    /// Remove a container by ID.
-    pub async fn remove_container(&self, id: &str) -> Result<(), DockerError> {
+    async fn remove_container(&self, id: &str) -> Result<(), DockerError> {
         self.docker
             .remove_container(
                 id,
@@ -192,8 +237,7 @@ impl DockerClient {
         Ok(())
     }
 
-    /// List Egret-managed containers, optionally filtered by task family.
-    pub async fn list_containers(
+    async fn list_containers(
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<ContainerInfo>, DockerError> {
@@ -228,27 +272,6 @@ impl DockerClient {
                 })
             })
             .collect())
-    }
-
-    // --- Logs ---
-
-    /// Stream container logs (follow mode).
-    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, DockerError>> + '_ {
-        self.docker
-            .logs(
-                id,
-                Some(LogsOptions::<String> {
-                    follow: true,
-                    stdout: true,
-                    stderr: true,
-                    ..Default::default()
-                }),
-            )
-            .map(|result| {
-                result
-                    .map(|output| output.to_string())
-                    .map_err(DockerError::from)
-            })
     }
 }
 
@@ -314,5 +337,93 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         networking_config: Some(networking_config),
         labels: Some(config.labels.clone()),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+pub mod test_support {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// Mock Docker client for testing CLI orchestration logic.
+    pub struct MockDockerClient {
+        pub create_network_results: Mutex<VecDeque<Result<String, DockerError>>>,
+        pub create_container_results: Mutex<VecDeque<Result<String, DockerError>>>,
+        pub start_container_results: Mutex<VecDeque<Result<(), DockerError>>>,
+        pub stop_container_results: Mutex<VecDeque<Result<(), DockerError>>>,
+        pub remove_container_results: Mutex<VecDeque<Result<(), DockerError>>>,
+        pub remove_network_results: Mutex<VecDeque<Result<(), DockerError>>>,
+        pub list_containers_results: Mutex<VecDeque<Result<Vec<ContainerInfo>, DockerError>>>,
+        pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, DockerError>>>,
+    }
+
+    impl MockDockerClient {
+        pub fn new() -> Self {
+            Self {
+                create_network_results: Mutex::new(VecDeque::new()),
+                create_container_results: Mutex::new(VecDeque::new()),
+                start_container_results: Mutex::new(VecDeque::new()),
+                stop_container_results: Mutex::new(VecDeque::new()),
+                remove_container_results: Mutex::new(VecDeque::new()),
+                remove_network_results: Mutex::new(VecDeque::new()),
+                list_containers_results: Mutex::new(VecDeque::new()),
+                list_networks_results: Mutex::new(VecDeque::new()),
+            }
+        }
+    }
+
+    /// Pop the next result from a `Mutex<VecDeque<Result<T, DockerError>>>`,
+    /// returning `DockerError::DaemonNotRunning` if the queue is empty.
+    fn pop_result<T>(queue: &Mutex<VecDeque<Result<T, DockerError>>>) -> Result<T, DockerError> {
+        queue
+            .lock()
+            .ok()
+            .and_then(|mut q| q.pop_front())
+            .unwrap_or(Err(DockerError::DaemonNotRunning))
+    }
+
+    impl DockerApi for MockDockerClient {
+        async fn create_network(&self, _family: &str) -> Result<String, DockerError> {
+            pop_result(&self.create_network_results)
+        }
+
+        async fn remove_network(&self, _name: &str) -> Result<(), DockerError> {
+            pop_result(&self.remove_network_results)
+        }
+
+        async fn list_networks(
+            &self,
+            _task_filter: Option<&str>,
+        ) -> Result<Vec<NetworkInfo>, DockerError> {
+            pop_result(&self.list_networks_results)
+        }
+
+        async fn create_container(
+            &self,
+            _config: &ContainerConfig,
+        ) -> Result<String, DockerError> {
+            pop_result(&self.create_container_results)
+        }
+
+        async fn start_container(&self, _id: &str) -> Result<(), DockerError> {
+            pop_result(&self.start_container_results)
+        }
+
+        async fn stop_container(&self, _id: &str) -> Result<(), DockerError> {
+            pop_result(&self.stop_container_results)
+        }
+
+        async fn remove_container(&self, _id: &str) -> Result<(), DockerError> {
+            pop_result(&self.remove_container_results)
+        }
+
+        async fn list_containers(
+            &self,
+            _task_filter: Option<&str>,
+        ) -> Result<Vec<ContainerInfo>, DockerError> {
+            pop_result(&self.list_containers_results)
+        }
     }
 }

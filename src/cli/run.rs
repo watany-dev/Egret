@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 
 use super::RunArgs;
-use crate::docker::{ContainerConfig, DockerClient, PortMappingConfig};
+use crate::docker::{ContainerConfig, DockerApi, DockerClient, PortMappingConfig};
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
 /// Execute the `run` subcommand.
