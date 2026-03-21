@@ -427,3 +427,111 @@ pub mod test_support {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_config() -> ContainerConfig {
+        ContainerConfig {
+            name: "test-app".to_string(),
+            image: "nginx:latest".to_string(),
+            command: vec!["nginx".into(), "-g".into(), "daemon off;".into()],
+            entry_point: vec!["/entrypoint.sh".into()],
+            env: vec!["PORT=8080".to_string()],
+            port_mappings: vec![PortMappingConfig {
+                host_port: 8080,
+                container_port: 80,
+                protocol: "tcp".to_string(),
+            }],
+            network: "egret-test".to_string(),
+            network_aliases: vec!["app".to_string()],
+            labels: HashMap::from([("egret.managed".into(), "true".into())]),
+        }
+    }
+
+    #[test]
+    fn build_bollard_config_with_ports() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+
+        // Verify exposed ports key format
+        let exposed = result.exposed_ports.as_ref().expect("exposed_ports");
+        assert!(exposed.contains_key("80/tcp"));
+
+        // Verify port bindings
+        let host_config = result.host_config.as_ref().expect("host_config");
+        let bindings = host_config
+            .port_bindings
+            .as_ref()
+            .expect("port_bindings");
+        let binding = bindings
+            .get("80/tcp")
+            .expect("80/tcp binding")
+            .as_ref()
+            .expect("binding vec");
+        assert_eq!(binding.len(), 1);
+        assert_eq!(binding[0].host_ip.as_deref(), Some("0.0.0.0"));
+        assert_eq!(binding[0].host_port.as_deref(), Some("8080"));
+    }
+
+    #[test]
+    fn build_bollard_config_empty_cmd_and_env() {
+        let config = ContainerConfig {
+            name: "min".to_string(),
+            image: "alpine".to_string(),
+            command: vec![],
+            entry_point: vec![],
+            env: vec![],
+            port_mappings: vec![],
+            network: "net".to_string(),
+            network_aliases: vec![],
+            labels: HashMap::new(),
+        };
+        let result = build_bollard_config(&config);
+
+        assert!(result.cmd.is_none());
+        assert!(result.entrypoint.is_none());
+        assert!(result.env.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_with_cmd_and_entrypoint() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+
+        let cmd = result.cmd.expect("cmd should be Some");
+        assert_eq!(cmd, vec!["nginx", "-g", "daemon off;"]);
+
+        let ep = result.entrypoint.expect("entrypoint should be Some");
+        assert_eq!(ep, vec!["/entrypoint.sh"]);
+
+        let env = result.env.expect("env should be Some");
+        assert_eq!(env, vec!["PORT=8080"]);
+    }
+
+    #[test]
+    fn build_bollard_config_networking() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+
+        let net_config = result.networking_config.as_ref().expect("networking_config");
+        let endpoint = net_config
+            .endpoints_config
+            .get("egret-test")
+            .expect("endpoint for egret-test");
+        assert_eq!(
+            endpoint.aliases.as_deref(),
+            Some(["app".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn docker_error_display() {
+        let err = DockerError::DaemonNotRunning;
+        assert_eq!(
+            err.to_string(),
+            "Docker daemon is not running. Please start Docker and try again."
+        );
+    }
+}
