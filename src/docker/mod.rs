@@ -1,3 +1,5 @@
+//! Docker Engine API client integration.
+
 use std::collections::HashMap;
 
 use bollard::Docker;

@@ -1,1 +1,1 @@
-// ECS metadata endpoint mock - Phase 3
+//! ECS metadata endpoint mock server.

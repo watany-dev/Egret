@@ -1,3 +1,5 @@
+//! ECS task definition parsing and types.
+
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -74,7 +76,7 @@ pub struct ContainerDefinition {
     pub memory_reservation: Option<u32>,
 }
 
-fn default_essential() -> bool {
+const fn default_essential() -> bool {
     true
 }
 

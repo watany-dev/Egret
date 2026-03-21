@@ -3,6 +3,8 @@ use anyhow::Result;
 use super::StopArgs;
 use crate::docker::DockerClient;
 
+/// Execute the `stop` subcommand.
+#[allow(clippy::print_stdout)]
 pub async fn execute(args: &StopArgs) -> Result<()> {
     let task_filter = if args.all {
         None

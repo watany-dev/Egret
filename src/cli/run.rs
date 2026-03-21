@@ -9,6 +9,8 @@ use super::RunArgs;
 use crate::docker::{ContainerConfig, DockerClient, PortMappingConfig};
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
+/// Execute the `run` subcommand.
+#[allow(clippy::print_stdout)]
 pub async fn execute(args: &RunArgs) -> Result<()> {
     // 1. Parse task definition
     let task_def = TaskDefinition::from_file(&args.task_definition)?;
@@ -80,6 +82,7 @@ fn build_container_config(
     }
 }
 
+#[allow(clippy::print_stdout)]
 async fn stream_logs_until_signal(client: &Arc<DockerClient>, containers: &[(String, String)]) {
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
