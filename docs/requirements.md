@@ -101,6 +101,36 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 | FR-9.3 | `egret ps` で実行中タスク一覧を表示する | 🔲 未実装 |
 | FR-9.4 | `egret logs <container>` で特定コンテナのログを表示する | 🔲 未実装 |
 
+### FR-10: バリデーション + プロジェクト初期化
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-10.1 | `egret validate` でタスク定義を静的解析できる（イメージ形式、ポート競合、ARN形式等） | 🔲 未実装 |
+| FR-10.2 | `egret init` でスターターファイル（タスク定義、override、secrets テンプレート）を生成できる | 🔲 未実装 |
+| FR-10.3 | `--dry-run` で起動せずにコンテナ構成を確認できる（secrets 値は伏字） | 🔲 未実装 |
+| FR-10.4 | バリデーションエラーにフィールドパス・期待型・修正提案を含める | 🔲 未実装 |
+
+### FR-11: 可観測性 + 診断
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-11.1 | `egret ps` でリソース使用量・ヘルスチェック状態・依存関係を表示できる | 🔲 未実装 |
+| FR-11.2 | `egret ps` の出力形式を `--output json/wide` で切り替えできる | 🔲 未実装 |
+| FR-11.3 | `egret inspect` で実行中タスクの詳細（実効設定、ネットワーク構成）を表示できる | 🔲 未実装 |
+| FR-11.4 | `egret stats` でライブリソース使用量（CPU、メモリ、I/O）を表示できる | 🔲 未実装 |
+| FR-11.5 | `egret history` で実行履歴を記録・表示できる | 🔲 未実装 |
+| FR-11.6 | `--events` でライフサイクルイベントを NDJSON 形式で出力できる | 🔲 未実装 |
+
+### FR-12: ワークフロー高速化
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-12.1 | `egret watch` でファイル変更時にタスクを自動再起動できる | 🔲 未実装 |
+| FR-12.2 | `egret diff` でタスク定義をセマンティックに比較できる | 🔲 未実装 |
+| FR-12.3 | `--profile` で設定プロファイル（override + secrets）を切り替えできる | 🔲 未実装 |
+| FR-12.4 | `egret compose-import` で docker-compose.yml を ECS タスク定義に変換できる | 🔲 未実装 |
+| FR-12.5 | `egret completions` でシェル補完スクリプト（bash/zsh/fish）を生成できる | 🔲 未実装 |
+
 ---
 
 ## 非機能要件
@@ -123,3 +153,7 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 - Capacity providers / Deployment circuit breaker
 - FireLens 本番同等挙動
 - Service / Auto Scaling / ローリングデプロイ
+- コンテナイメージのビルド（Docker/Buildah/Kaniko の責務）
+- Prometheus / Grafana 等の外部監視スタック連携
+- awsvpc ネットワークモード完全再現
+- Service Mesh / Service Connect
