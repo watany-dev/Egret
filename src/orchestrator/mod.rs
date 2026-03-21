@@ -1,8 +1,10 @@
 //! Container lifecycle orchestration and `dependsOn` DAG.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Duration;
 
-use crate::taskdef::DependsOn;
+use crate::container::ContainerRuntime;
+use crate::taskdef::{DependencyCondition, DependsOn, HealthCheck};
 
 /// Orchestrator errors.
 #[derive(Debug, thiserror::Error)]
@@ -186,6 +188,86 @@ fn format_cycle_path(path: &[&str]) -> String {
         )
 }
 
+/// Wait for a dependency condition to be met.
+#[allow(dead_code)]
+pub async fn wait_for_condition(
+    client: &(impl ContainerRuntime + ?Sized),
+    id: &str,
+    name: &str,
+    condition: DependencyCondition,
+    health_check: Option<&HealthCheck>,
+) -> Result<(), OrchestratorError> {
+    match condition {
+        DependencyCondition::Start => {
+            // Container was already started, condition is met immediately.
+            Ok(())
+        }
+        DependencyCondition::Complete => {
+            let result = client.wait_container(id).await?;
+            tracing::info!(container = %name, exit_code = result.status_code, "Container completed");
+            Ok(())
+        }
+        DependencyCondition::Success => {
+            let result = client.wait_container(id).await?;
+            if result.status_code == 0 {
+                tracing::info!(container = %name, "Container completed successfully");
+                Ok(())
+            } else {
+                Err(OrchestratorError::ConditionNotMet(
+                    name.to_string(),
+                    format!("expected exit code 0, got {}", result.status_code),
+                ))
+            }
+        }
+        DependencyCondition::Healthy => {
+            let hc = health_check.ok_or_else(|| {
+                OrchestratorError::ConditionNotMet(
+                    name.to_string(),
+                    "HEALTHY condition requires a healthCheck".to_string(),
+                )
+            })?;
+            wait_for_healthy(client, id, name, hc).await
+        }
+    }
+}
+
+/// Poll `inspect_container` until health status becomes "healthy" or timeout.
+#[allow(dead_code)]
+async fn wait_for_healthy(
+    client: &(impl ContainerRuntime + ?Sized),
+    id: &str,
+    name: &str,
+    health_check: &HealthCheck,
+) -> Result<(), OrchestratorError> {
+    let timeout_secs = u64::from(health_check.start_period)
+        + u64::from(health_check.interval) * (u64::from(health_check.retries) + 1)
+        + 30;
+    let timeout = Duration::from_secs(timeout_secs);
+    let poll_interval = Duration::from_secs(u64::from(health_check.interval).max(1));
+
+    let poll_future = async {
+        loop {
+            let inspection = client.inspect_container(id).await?;
+            match inspection.state.health_status.as_deref() {
+                Some("healthy") => {
+                    tracing::info!(container = %name, "Container is healthy");
+                    return Ok(());
+                }
+                Some("unhealthy") => {
+                    return Err(OrchestratorError::HealthCheckTimeout(name.to_string()));
+                }
+                _ => {
+                    tokio::time::sleep(poll_interval).await;
+                }
+            }
+        }
+    };
+
+    tokio::time::timeout(timeout, poll_future)
+        .await
+        .map_err(|_| OrchestratorError::HealthCheckTimeout(name.to_string()))?
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -319,5 +401,185 @@ mod tests {
     fn resolve_empty_input() {
         let layers = resolve_start_order(&[]).expect("should resolve");
         assert!(layers.is_empty());
+    }
+
+    // --- Condition waiting tests ---
+
+    use crate::container::test_support::MockContainerClient;
+    use crate::container::{ContainerInspection, ContainerState, WaitResult};
+    use crate::taskdef::HealthCheck;
+
+    #[tokio::test]
+    async fn wait_for_condition_start_returns_immediately() {
+        let mock = MockContainerClient::new();
+        let result =
+            wait_for_condition(&mock, "id1", "app", DependencyCondition::Start, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_for_condition_complete_waits_for_exit() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 1 }));
+
+        let result =
+            wait_for_condition(&mock, "id1", "app", DependencyCondition::Complete, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_for_condition_success_exits_zero() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 0 }));
+
+        let result =
+            wait_for_condition(&mock, "id1", "app", DependencyCondition::Success, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_for_condition_success_exits_nonzero_fails() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 1 }));
+
+        let result =
+            wait_for_condition(&mock, "id1", "app", DependencyCondition::Success, None).await;
+        assert!(
+            matches!(result, Err(OrchestratorError::ConditionNotMet(ref name, _)) if name == "app"),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_healthy_becomes_healthy() {
+        let mock = MockContainerClient::new();
+        // First poll: starting, second poll: healthy
+        {
+            let mut q = mock.inspect_container_results.lock().unwrap();
+            q.push_back(Ok(ContainerInspection {
+                id: "id1".into(),
+                state: ContainerState {
+                    status: "running".into(),
+                    running: true,
+                    exit_code: None,
+                    health_status: Some("starting".into()),
+                },
+            }));
+            q.push_back(Ok(ContainerInspection {
+                id: "id1".into(),
+                state: ContainerState {
+                    status: "running".into(),
+                    running: true,
+                    exit_code: None,
+                    health_status: Some("healthy".into()),
+                },
+            }));
+        }
+
+        let hc = HealthCheck {
+            command: vec!["CMD-SHELL".into(), "true".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 3,
+            start_period: 0,
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_for_healthy_becomes_unhealthy_fails() {
+        let mock = MockContainerClient::new();
+        mock.inspect_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(ContainerInspection {
+                id: "id1".into(),
+                state: ContainerState {
+                    status: "running".into(),
+                    running: true,
+                    exit_code: None,
+                    health_status: Some("unhealthy".into()),
+                },
+            }));
+
+        let hc = HealthCheck {
+            command: vec!["CMD-SHELL".into(), "false".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 1,
+            start_period: 0,
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_healthy_timeout_fails() {
+        let mock = MockContainerClient::new();
+        // Return "starting" indefinitely — each call pops from queue, then RuntimeNotRunning
+        for _ in 0..100 {
+            mock.inspect_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(ContainerInspection {
+                    id: "id1".into(),
+                    state: ContainerState {
+                        status: "running".into(),
+                        running: true,
+                        exit_code: None,
+                        health_status: Some("starting".into()),
+                    },
+                }));
+        }
+
+        let hc = HealthCheck {
+            command: vec!["CMD-SHELL".into(), "true".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 1,
+            start_period: 0,
+        };
+
+        // Use tokio::time::pause for deterministic time control
+        tokio::time::pause();
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
+            "unexpected: {result:?}"
+        );
     }
 }
