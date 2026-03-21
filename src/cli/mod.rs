@@ -46,3 +46,41 @@ pub struct StopArgs {
     #[arg(long)]
     pub all: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn parse_version_command() {
+        let cli = Cli::try_parse_from(["egret", "version"]).expect("should parse");
+        assert!(matches!(cli.command, Command::Version));
+    }
+
+    #[test]
+    fn parse_run_command() {
+        let cli =
+            Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert!(args.r#override.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_stop_all() {
+        let cli = Cli::try_parse_from(["egret", "stop", "--all"]).expect("should parse");
+        match cli.command {
+            Command::Stop(args) => {
+                assert!(args.all);
+                assert!(args.task.is_none());
+            }
+            _ => panic!("expected Stop command"),
+        }
+    }
+}
