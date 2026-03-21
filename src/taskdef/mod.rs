@@ -1,5 +1,6 @@
 //! ECS task definition parsing and types.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -219,6 +220,48 @@ impl TaskDefinition {
         Ok(task_def)
     }
 
+    /// Validate `dependsOn` references.
+    fn validate_depends_on(&self) -> Result<(), TaskDefError> {
+        let names: HashSet<&str> = self
+            .container_definitions
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+
+        let has_health_check: HashSet<&str> = self
+            .container_definitions
+            .iter()
+            .filter(|c| c.health_check.is_some())
+            .map(|c| c.name.as_str())
+            .collect();
+
+        for container in &self.container_definitions {
+            for dep in &container.depends_on {
+                if dep.container_name == container.name {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' has a self-referencing dependsOn",
+                        container.name
+                    )));
+                }
+                if !names.contains(dep.container_name.as_str()) {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' depends on unknown container '{}'",
+                        container.name, dep.container_name
+                    )));
+                }
+                if dep.condition == DependencyCondition::Healthy
+                    && !has_health_check.contains(dep.container_name.as_str())
+                {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' depends on '{}' with HEALTHY condition, but '{}' has no healthCheck",
+                        container.name, dep.container_name, dep.container_name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validate the task definition (fail-fast).
     fn validate(&self) -> Result<(), TaskDefError> {
         if self.family.is_empty() {
@@ -244,7 +287,7 @@ impl TaskDefinition {
                 )));
             }
         }
-        Ok(())
+        self.validate_depends_on()
     }
 }
 
@@ -633,7 +676,7 @@ mod tests {
                 { "name": "a", "image": "alpine:latest" },
                 { "name": "b", "image": "alpine:latest" },
                 { "name": "c", "image": "alpine:latest" },
-                { "name": "d", "image": "alpine:latest" },
+                { "name": "d", "image": "alpine:latest", "healthCheck": { "command": ["CMD-SHELL", "true"] } },
                 {
                     "name": "app",
                     "image": "alpine:latest",
@@ -653,5 +696,92 @@ mod tests {
         assert_eq!(deps[1].condition, DependencyCondition::Complete);
         assert_eq!(deps[2].condition, DependencyCondition::Success);
         assert_eq!(deps[3].condition, DependencyCondition::Healthy);
+    }
+
+    #[test]
+    fn validate_depends_on_unknown_container() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "nonexistent", "condition": "START" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("unknown container 'nonexistent'")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_depends_on_self_reference() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "app", "condition": "START" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("self-referencing")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_depends_on_healthy_requires_health_check() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "db", "image": "postgres:16" },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "db", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("has no healthCheck")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_depends_on_valid() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "db",
+                    "image": "postgres:16",
+                    "healthCheck": { "command": ["CMD-SHELL", "pg_isready"] }
+                },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "db", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse valid dependsOn");
+        assert_eq!(task_def.container_definitions[1].depends_on.len(), 1);
     }
 }
