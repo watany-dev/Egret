@@ -6,7 +6,9 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 
 use super::RunArgs;
-use crate::container::{ContainerClient, ContainerConfig, ContainerRuntime, PortMappingConfig};
+use crate::container::{
+    ContainerClient, ContainerConfig, ContainerRuntime, HealthCheckConfig, PortMappingConfig,
+};
 use crate::credentials;
 use crate::metadata::{
     self, ContainerMetadata, MetadataServer, ServerState, SharedState, build_container_metadata,
@@ -252,6 +254,17 @@ fn build_container_config(
         })
         .collect();
 
+    let health_check = def.health_check.as_ref().map(|hc| {
+        const NANOS_PER_SEC: i64 = 1_000_000_000;
+        HealthCheckConfig {
+            test: hc.command.clone(),
+            interval_ns: i64::from(hc.interval) * NANOS_PER_SEC,
+            timeout_ns: i64::from(hc.timeout) * NANOS_PER_SEC,
+            retries: i64::from(hc.retries),
+            start_period_ns: i64::from(hc.start_period) * NANOS_PER_SEC,
+        }
+    });
+
     ContainerConfig {
         name: format!("{family}-{}", def.name),
         image: def.image.clone(),
@@ -263,6 +276,7 @@ fn build_container_config(
         network_aliases: vec![def.name.clone()],
         labels,
         extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],
+        health_check,
     }
 }
 
@@ -668,5 +682,40 @@ mod tests {
             }
             _ => panic!("expected Run command"),
         }
+    }
+
+    #[test]
+    fn build_container_config_with_health_check() {
+        use crate::taskdef::HealthCheck;
+
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: Some(HealthCheck {
+                command: vec!["CMD-SHELL".into(), "curl -f http://localhost/".into()],
+                interval: 10,
+                timeout: 5,
+                retries: 3,
+                start_period: 15,
+            }),
+        };
+
+        let config = build_container_config("test", &def, "egret-test", None);
+        let hc = config.health_check.as_ref().expect("should have health check");
+        assert_eq!(hc.test, vec!["CMD-SHELL", "curl -f http://localhost/"]);
+        assert_eq!(hc.interval_ns, 10_000_000_000);
+        assert_eq!(hc.timeout_ns, 5_000_000_000);
+        assert_eq!(hc.retries, 3);
+        assert_eq!(hc.start_period_ns, 15_000_000_000);
     }
 }

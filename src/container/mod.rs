@@ -7,7 +7,7 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StopContainerOptions,
 };
-use bollard::models::{EndpointSettings, HostConfig, PortBinding};
+use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
@@ -73,6 +73,22 @@ pub struct ContainerConfig {
     pub labels: HashMap<String, String>,
     /// Extra host-to-IP mappings (e.g., `host.docker.internal:host-gateway`).
     pub extra_hosts: Vec<String>,
+    /// Docker HEALTHCHECK configuration.
+    pub health_check: Option<HealthCheckConfig>,
+}
+
+/// Docker HEALTHCHECK configuration (nanosecond units).
+pub struct HealthCheckConfig {
+    /// Health check command (e.g. `["CMD-SHELL", "curl -f http://localhost/"]`).
+    pub test: Vec<String>,
+    /// Interval between health checks in nanoseconds.
+    pub interval_ns: i64,
+    /// Timeout for each check in nanoseconds.
+    pub timeout_ns: i64,
+    /// Number of consecutive failures before marking unhealthy.
+    pub retries: i64,
+    /// Grace period before health checks start in nanoseconds.
+    pub start_period_ns: i64,
 }
 
 /// Port mapping configuration.
@@ -419,6 +435,15 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         Some(config.env.clone())
     };
 
+    let healthcheck = config.health_check.as_ref().map(|hc| HealthConfig {
+        test: Some(hc.test.clone()),
+        interval: Some(hc.interval_ns),
+        timeout: Some(hc.timeout_ns),
+        retries: Some(hc.retries),
+        start_period: Some(hc.start_period_ns),
+        start_interval: None,
+    });
+
     Config {
         image: Some(config.image.clone()),
         cmd,
@@ -428,6 +453,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         host_config: Some(host_config),
         networking_config: Some(networking_config),
         labels: Some(config.labels.clone()),
+        healthcheck,
         ..Default::default()
     }
 }
@@ -544,6 +570,7 @@ mod tests {
             network_aliases: vec!["app".to_string()],
             labels: HashMap::from([("egret.managed".into(), "true".into())]),
             extra_hosts: vec![],
+            health_check: None,
         }
     }
 
@@ -602,6 +629,7 @@ mod tests {
             network_aliases: vec![],
             labels: HashMap::new(),
             extra_hosts: vec![],
+            health_check: None,
         };
         let result = build_bollard_config(&config);
 
@@ -687,5 +715,37 @@ mod tests {
         let (scheme, path) = parse_host_url("/run/podman/podman.sock");
         assert_eq!(scheme, HostScheme::Unix);
         assert_eq!(path, "/run/podman/podman.sock");
+    }
+
+    #[test]
+    fn build_bollard_config_with_healthcheck() {
+        let mut config = sample_config();
+        config.health_check = Some(HealthCheckConfig {
+            test: vec!["CMD-SHELL".into(), "curl -f http://localhost/".into()],
+            interval_ns: 10_000_000_000,
+            timeout_ns: 5_000_000_000,
+            retries: 3,
+            start_period_ns: 15_000_000_000,
+        });
+
+        let result = build_bollard_config(&config);
+        let hc = result.healthcheck.as_ref().expect("healthcheck");
+        assert_eq!(
+            hc.test.as_deref(),
+            Some(
+                ["CMD-SHELL".to_string(), "curl -f http://localhost/".to_string()].as_slice()
+            )
+        );
+        assert_eq!(hc.interval, Some(10_000_000_000));
+        assert_eq!(hc.timeout, Some(5_000_000_000));
+        assert_eq!(hc.retries, Some(3));
+        assert_eq!(hc.start_period, Some(15_000_000_000));
+    }
+
+    #[test]
+    fn build_bollard_config_without_healthcheck() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        assert!(result.healthcheck.is_none());
     }
 }
