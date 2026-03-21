@@ -1,6 +1,9 @@
 {
   "effortLevel": "high",
   "language": "japanese",
+  "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(make:*)",
