@@ -147,66 +147,8 @@ impl DockerClient {
     // --- Container ---
 
     /// Create a container (does not start it). Returns the container ID.
-    #[allow(clippy::zero_sized_map_values)] // Docker API requires HashMap for exposed_ports
     pub async fn create_container(&self, config: &ContainerConfig) -> Result<String, DockerError> {
-        let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
-        let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
-
-        for pm in &config.port_mappings {
-            let container_key = format!("{}/{}", pm.container_port, pm.protocol);
-            exposed_ports.insert(container_key.clone(), HashMap::default());
-            port_bindings.insert(
-                container_key,
-                Some(vec![PortBinding {
-                    host_ip: Some("0.0.0.0".to_string()),
-                    host_port: Some(pm.host_port.to_string()),
-                }]),
-            );
-        }
-
-        let endpoint_settings = EndpointSettings {
-            aliases: Some(config.network_aliases.clone()),
-            ..Default::default()
-        };
-
-        let networking_config = bollard::container::NetworkingConfig {
-            endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
-        };
-
-        let host_config = HostConfig {
-            port_bindings: Some(port_bindings),
-            ..Default::default()
-        };
-
-        let cmd = if config.command.is_empty() {
-            None
-        } else {
-            Some(config.command.clone())
-        };
-
-        let entrypoint = if config.entry_point.is_empty() {
-            None
-        } else {
-            Some(config.entry_point.clone())
-        };
-
-        let env = if config.env.is_empty() {
-            None
-        } else {
-            Some(config.env.clone())
-        };
-
-        let container_config = Config {
-            image: Some(config.image.clone()),
-            cmd,
-            entrypoint,
-            env,
-            exposed_ports: Some(exposed_ports),
-            host_config: Some(host_config),
-            networking_config: Some(networking_config),
-            labels: Some(config.labels.clone()),
-            ..Default::default()
-        };
+        let container_config = build_bollard_config(config);
 
         let response = self
             .docker
@@ -307,5 +249,70 @@ impl DockerClient {
                     .map(|output| output.to_string())
                     .map_err(DockerError::from)
             })
+    }
+}
+
+/// Build a bollard container `Config` from an Egret `ContainerConfig`.
+///
+/// Pure function — no Docker daemon interaction.
+#[allow(clippy::zero_sized_map_values)] // Docker API requires HashMap for exposed_ports
+pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
+    let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
+    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+
+    for pm in &config.port_mappings {
+        let container_key = format!("{}/{}", pm.container_port, pm.protocol);
+        exposed_ports.insert(container_key.clone(), HashMap::default());
+        port_bindings.insert(
+            container_key,
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some(pm.host_port.to_string()),
+            }]),
+        );
+    }
+
+    let endpoint_settings = EndpointSettings {
+        aliases: Some(config.network_aliases.clone()),
+        ..Default::default()
+    };
+
+    let networking_config = bollard::container::NetworkingConfig {
+        endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
+    };
+
+    let host_config = HostConfig {
+        port_bindings: Some(port_bindings),
+        ..Default::default()
+    };
+
+    let cmd = if config.command.is_empty() {
+        None
+    } else {
+        Some(config.command.clone())
+    };
+
+    let entrypoint = if config.entry_point.is_empty() {
+        None
+    } else {
+        Some(config.entry_point.clone())
+    };
+
+    let env = if config.env.is_empty() {
+        None
+    } else {
+        Some(config.env.clone())
+    };
+
+    Config {
+        image: Some(config.image.clone()),
+        cmd,
+        entrypoint,
+        env,
+        exposed_ports: Some(exposed_ports),
+        host_config: Some(host_config),
+        networking_config: Some(networking_config),
+        labels: Some(config.labels.clone()),
+        ..Default::default()
     }
 }
