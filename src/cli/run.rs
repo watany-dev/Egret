@@ -185,6 +185,8 @@ mod tests {
     fn single_container_taskdef() -> TaskDefinition {
         TaskDefinition {
             family: "web".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),
@@ -204,6 +206,8 @@ mod tests {
     fn two_container_taskdef() -> TaskDefinition {
         TaskDefinition {
             family: "multi".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
             container_definitions: vec![
                 ContainerDefinition {
                     name: "app".to_string(),

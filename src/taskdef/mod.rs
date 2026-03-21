@@ -28,6 +28,14 @@ pub struct TaskDefinition {
     /// Task family name (used for network name and labels).
     pub family: String,
 
+    /// IAM role ARN for the task (containers assume this role via credentials).
+    #[serde(default)]
+    pub task_role_arn: Option<String>,
+
+    /// IAM role ARN for the execution agent (used for pulling images, etc.).
+    #[serde(default)]
+    pub execution_role_arn: Option<String>,
+
     /// Container definitions.
     pub container_definitions: Vec<ContainerDefinition>,
 }
@@ -408,6 +416,34 @@ mod tests {
     fn parse_secrets_empty_default() {
         let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
         assert!(task_def.container_definitions[0].secrets.is_empty());
+    }
+
+    #[test]
+    fn parse_task_role_arn() {
+        let json = r#"{
+            "family": "test",
+            "taskRoleArn": "arn:aws:iam::123456789012:role/my-role",
+            "executionRoleArn": "arn:aws:iam::123456789012:role/exec-role",
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        assert_eq!(
+            task_def.task_role_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/my-role")
+        );
+        assert_eq!(
+            task_def.execution_role_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/exec-role")
+        );
+    }
+
+    #[test]
+    fn parse_no_role_arns_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.task_role_arn.is_none());
+        assert!(task_def.execution_role_arn.is_none());
     }
 
     #[test]
