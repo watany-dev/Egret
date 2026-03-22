@@ -29,7 +29,7 @@ pub async fn execute_with_client(
 
     match args.output {
         OutputFormat::Json => println!("{}", format_json(&containers)),
-        OutputFormat::Table | OutputFormat::Wide => {
+        OutputFormat::Table => {
             println!("{}", format_table(&containers));
         }
     }
