@@ -81,7 +81,7 @@ pub struct ContainerConfig {
     pub extra_hosts: Vec<String>,
     /// Docker HEALTHCHECK configuration.
     pub health_check: Option<HealthCheckConfig>,
-    /// Bind mount volumes (format: "host_path:container_path" or "host_path:container_path:ro").
+    /// Bind mount volumes (format: `host_path:container_path` or `host_path:container_path:ro`).
     pub binds: Vec<String>,
 }
 

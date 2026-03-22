@@ -320,13 +320,13 @@ impl TaskDefinition {
 
         // Validate host.source_path is not empty when host is present
         for volume in &self.volumes {
-            if let Some(host) = &volume.host {
-                if host.source_path.is_empty() {
-                    return Err(TaskDefError::Validation(format!(
-                        "volume '{}' has empty host.sourcePath",
-                        volume.name
-                    )));
-                }
+            if let Some(host) = &volume.host
+                && host.source_path.is_empty()
+            {
+                return Err(TaskDefError::Validation(format!(
+                    "volume '{}' has empty host.sourcePath",
+                    volume.name
+                )));
             }
         }
 

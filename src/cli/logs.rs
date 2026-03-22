@@ -20,28 +20,14 @@ pub async fn execute(args: &LogsArgs, host: Option<&str>) -> Result<()> {
 
     let id = container.id.clone();
 
-    if args.follow {
-        let mut stream = client.stream_logs(&id);
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(line) => println!("{line}"),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Log stream error");
-                    break;
-                }
-            }
-        }
-    } else {
-        use bollard::container::LogsOptions;
-        let docker = &client;
-        let mut stream = docker.stream_logs(&id);
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(line) => println!("{line}"),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Log stream error");
-                    break;
-                }
+    // stream_logs uses follow mode; for non-follow we read until the stream ends
+    let mut stream = client.stream_logs(&id);
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(line) => println!("{line}"),
+            Err(e) => {
+                tracing::warn!(error = %e, "Log stream error");
+                break;
             }
         }
     }
@@ -104,10 +90,7 @@ mod tests {
 
     #[test]
     fn find_container_exact_match_preferred() {
-        let containers = vec![
-            container_info("app"),
-            container_info("my-app-app"),
-        ];
+        let containers = vec![container_info("app"), container_info("my-app-app")];
         let result = find_container(&containers, "app");
         assert_eq!(result.unwrap().name, "app");
     }

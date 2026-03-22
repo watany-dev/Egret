@@ -251,7 +251,7 @@ async fn stream_logs_until_signal(client: &Arc<ContainerClient>, containers: &[(
 
 /// Resolve mount points against task-level volumes into Docker bind mount strings.
 ///
-/// Returns bind strings in format "host_path:container_path" or "host_path:container_path:ro".
+/// Returns bind strings in format `host_path:container_path` or `host_path:container_path:ro`.
 /// Volumes without `host.source_path` (Docker-managed volumes) are skipped with a warning.
 fn resolve_binds(mount_points: &[MountPoint], volumes: &[Volume]) -> Vec<String> {
     let volume_map: HashMap<&str, &Volume> = volumes.iter().map(|v| (v.name.as_str(), v)).collect();
@@ -260,15 +260,12 @@ fn resolve_binds(mount_points: &[MountPoint], volumes: &[Volume]) -> Vec<String>
         .iter()
         .filter_map(|mp| {
             let volume = volume_map.get(mp.source_volume.as_str())?;
-            let host = match &volume.host {
-                Some(h) => h,
-                None => {
-                    tracing::warn!(
-                        volume = %volume.name,
-                        "Skipping volume without host.sourcePath (Docker-managed volumes not supported)"
-                    );
-                    return None;
-                }
+            let Some(host) = &volume.host else {
+                tracing::warn!(
+                    volume = %volume.name,
+                    "Skipping volume without host.sourcePath (Docker-managed volumes not supported)"
+                );
+                return None;
             };
 
             let bind = if mp.read_only {
