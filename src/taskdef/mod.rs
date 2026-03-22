@@ -1,5 +1,7 @@
 //! ECS task definition parsing and types.
 
+pub mod diagnostics;
+
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
