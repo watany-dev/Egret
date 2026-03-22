@@ -14,6 +14,9 @@ pub fn execute(args: &InitArgs) -> Result<()> {
             args.dir.display()
         );
     }
+    if !args.dir.is_dir() {
+        anyhow::bail!("'{}' is not a directory", args.dir.display());
+    }
 
     let container_name = "app";
     let mut created = Vec::new();
