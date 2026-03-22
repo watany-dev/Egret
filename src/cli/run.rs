@@ -393,7 +393,7 @@ fn format_container_dry_run(
     use std::fmt::Write;
 
     let mut output = String::new();
-    let _ = writeln!(output, "\nContainer: {}-{}", family, container.name);
+    let _ = writeln!(output, "Container: {}-{}", family, container.name);
     let _ = writeln!(output, "  Image: {}", container.image);
 
     if !container.environment.is_empty() {
