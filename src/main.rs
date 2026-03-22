@@ -28,6 +28,8 @@ async fn main() -> Result<()> {
     match cli.command {
         cli::Command::Run(args) => cli::run::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Stop(args) => cli::stop::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Ps(args) => cli::ps::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Logs(args) => cli::logs::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Version => cli::version::execute(),
     }
 

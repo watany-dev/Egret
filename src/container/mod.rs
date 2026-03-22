@@ -110,9 +110,9 @@ pub struct PortMappingConfig {
 pub struct ContainerInfo {
     pub id: String,
     pub name: String,
-    #[allow(dead_code)]
+    /// Container image name.
+    pub image: String,
     pub family: String,
-    #[allow(dead_code)]
     pub state: String,
 }
 
@@ -403,6 +403,7 @@ impl ContainerRuntime for ContainerClient {
                         .and_then(|n| n.first())
                         .map(|n| n.trim_start_matches('/').to_string())
                         .unwrap_or_default(),
+                    image: c.image.unwrap_or_default(),
                     family: labels.get("egret.task").cloned().unwrap_or_default(),
                     state: c.state.unwrap_or_default(),
                 })
