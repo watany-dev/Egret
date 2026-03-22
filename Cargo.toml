@@ -26,6 +26,7 @@ aws-config = "1"
 aws-credential-types = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 getrandom = { version = "0.3", features = ["std"] }
+clap_complete = "4"
 toml = "0.8"
 
 [dev-dependencies]

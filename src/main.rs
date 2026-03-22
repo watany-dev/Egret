@@ -39,6 +39,8 @@ async fn main() -> Result<()> {
         cli::Command::Stats(args) => cli::stats::execute(&args, cli.host.as_deref()).await?,
         cli::Command::History(args) => cli::history::execute(&args)?,
         cli::Command::Version => cli::version::execute(),
+        cli::Command::Completions(args) => cli::completions::execute(&args),
+        cli::Command::Diff(args) => cli::diff::execute(&args)?,
     }
 
     Ok(())

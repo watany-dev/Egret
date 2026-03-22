@@ -1,5 +1,7 @@
 //! CLI command definitions and argument parsing.
 
+pub mod completions;
+pub mod diff;
 pub mod history;
 pub mod init;
 pub mod inspect;
@@ -49,6 +51,24 @@ pub enum Command {
     History(HistoryArgs),
     /// Show version information
     Version,
+    /// Generate shell completion scripts
+    Completions(CompletionsArgs),
+    /// Compare two task definition files semantically
+    Diff(DiffArgs),
+}
+
+#[derive(Parser)]
+pub struct CompletionsArgs {
+    /// Shell type (bash, zsh, fish)
+    pub shell: clap_complete::Shell,
+}
+
+#[derive(Parser)]
+pub struct DiffArgs {
+    /// First task definition file
+    pub file1: PathBuf,
+    /// Second task definition file
+    pub file2: PathBuf,
 }
 
 #[derive(Parser)]
@@ -479,6 +499,51 @@ mod tests {
                 assert!(args.clear);
             }
             _ => panic!("expected History command"),
+        }
+    }
+
+    #[test]
+    fn parse_diff_command() {
+        let cli = Cli::try_parse_from(["egret", "diff", "a.json", "b.json"]).expect("should parse");
+        match cli.command {
+            Command::Diff(args) => {
+                assert_eq!(args.file1.to_str(), Some("a.json"));
+                assert_eq!(args.file2.to_str(), Some("b.json"));
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn parse_completions_bash() {
+        let cli = Cli::try_parse_from(["egret", "completions", "bash"]).expect("should parse");
+        match cli.command {
+            Command::Completions(args) => {
+                assert_eq!(args.shell, clap_complete::Shell::Bash);
+            }
+            _ => panic!("expected Completions command"),
+        }
+    }
+
+    #[test]
+    fn parse_completions_zsh() {
+        let cli = Cli::try_parse_from(["egret", "completions", "zsh"]).expect("should parse");
+        match cli.command {
+            Command::Completions(args) => {
+                assert_eq!(args.shell, clap_complete::Shell::Zsh);
+            }
+            _ => panic!("expected Completions command"),
+        }
+    }
+
+    #[test]
+    fn parse_completions_fish() {
+        let cli = Cli::try_parse_from(["egret", "completions", "fish"]).expect("should parse");
+        match cli.command {
+            Command::Completions(args) => {
+                assert_eq!(args.shell, clap_complete::Shell::Fish);
+            }
+            _ => panic!("expected Completions command"),
         }
     }
 
