@@ -109,6 +109,22 @@ pub struct StopArgs {
 pub struct PsArgs {
     /// Filter by task family name
     pub task: Option<String>,
+
+    /// Output format: table (default), json, wide
+    #[arg(short, long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+/// Output format for the `ps` and `stats` commands.
+#[derive(Clone, Default, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// Default table view
+    #[default]
+    Table,
+    /// JSON output
+    Json,
+    /// Wide table with additional columns
+    Wide,
 }
 
 #[derive(Parser)]
@@ -228,6 +244,7 @@ mod tests {
         match cli.command {
             Command::Ps(args) => {
                 assert!(args.task.is_none());
+                assert!(matches!(args.output, OutputFormat::Table));
             }
             _ => panic!("expected Ps command"),
         }
@@ -239,6 +256,30 @@ mod tests {
         match cli.command {
             Command::Ps(args) => {
                 assert_eq!(args.task.as_deref(), Some("my-app"));
+            }
+            _ => panic!("expected Ps command"),
+        }
+    }
+
+    #[test]
+    fn parse_ps_with_json_output() {
+        let cli =
+            Cli::try_parse_from(["egret", "ps", "--output", "json"]).expect("should parse");
+        match cli.command {
+            Command::Ps(args) => {
+                assert!(matches!(args.output, OutputFormat::Json));
+            }
+            _ => panic!("expected Ps command"),
+        }
+    }
+
+    #[test]
+    fn parse_ps_with_wide_output() {
+        let cli =
+            Cli::try_parse_from(["egret", "ps", "--output", "wide"]).expect("should parse");
+        match cli.command {
+            Command::Ps(args) => {
+                assert!(matches!(args.output, OutputFormat::Wide));
             }
             _ => panic!("expected Ps command"),
         }
