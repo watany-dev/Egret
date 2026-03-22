@@ -279,32 +279,20 @@ pub async fn update_container_id(state: &SharedState, name: &str, docker_id: &st
 
 /// Generate an authorization token for the credentials endpoint.
 ///
-/// Uses `RandomState` (`SipHash` with random keys) from the standard library
-/// combined with the current timestamp to produce a unique hex token.
-/// Cryptographic strength is not required — the purpose is process-level
-/// isolation on localhost, not network-level security (127.0.0.1 binding
-/// already prevents remote access).
+/// Uses the OS-provided CSPRNG via `getrandom` to produce a 128-bit
+/// cryptographically random hex token (32 hex characters).
 #[allow(dead_code)]
 pub fn generate_auth_token() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
+    use std::fmt::Write;
 
-    let state = RandomState::new();
-    let mut hasher = state.build_hasher();
-    hasher.write_u128(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos(),
-    );
-    let h1 = hasher.finish();
-
-    let state2 = RandomState::new();
-    let mut hasher2 = state2.build_hasher();
-    hasher2.write_u64(h1);
-    let h2 = hasher2.finish();
-
-    format!("{h1:016x}{h2:016x}")
+    let mut buf = [0u8; 16];
+    // OS CSPRNG failure is unrecoverable — no fallback possible.
+    #[allow(clippy::expect_used)]
+    getrandom::fill(&mut buf).expect("OS CSPRNG unavailable");
+    buf.iter().fold(String::with_capacity(32), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 /// Maximum request body size (1 MB).
@@ -849,6 +837,18 @@ mod tests {
         let t1 = generate_auth_token();
         let t2 = generate_auth_token();
         assert_ne!(t1, t2, "consecutive tokens should differ");
+    }
+
+    #[test]
+    fn generate_auth_token_length_is_consistent() {
+        for _ in 0..100 {
+            let token = generate_auth_token();
+            assert_eq!(token.len(), 32, "token should always be 32 hex chars");
+            assert!(
+                token.chars().all(|c| c.is_ascii_hexdigit()),
+                "token should be hex: {token}"
+            );
+        }
     }
 
     #[tokio::test]
