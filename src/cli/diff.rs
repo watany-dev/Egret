@@ -3,7 +3,7 @@
 //! Provides semantic comparison of two ECS task definition files,
 //! showing differences at the container, environment variable, and port level.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 
 use anyhow::Result;
@@ -30,9 +30,26 @@ fn diff_from_json(json1: &str, json2: &str) -> Result<String> {
     Ok(diff_task_definitions(&td1, &td2))
 }
 
+/// Collect secret variable names from both task definitions.
+fn collect_secret_names(td1: &TaskDefinition, td2: &TaskDefinition) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for c in &td1.container_definitions {
+        for s in &c.secrets {
+            names.insert(s.name.clone());
+        }
+    }
+    for c in &td2.container_definitions {
+        for s in &c.secrets {
+            names.insert(s.name.clone());
+        }
+    }
+    names
+}
+
 /// Core semantic diff logic.
 fn diff_task_definitions(td1: &TaskDefinition, td2: &TaskDefinition) -> String {
     let mut output = String::new();
+    let secret_names = collect_secret_names(td1, td2);
 
     // Compare family
     if td1.family != td2.family {
@@ -62,14 +79,14 @@ fn diff_task_definitions(td1: &TaskDefinition, td2: &TaskDefinition) -> String {
     for (name, c2) in &containers2 {
         if !containers1.contains_key(name) {
             let _ = writeln!(output, "\n=== Container: {name} (added) ===");
-            format_container_summary(c2, &mut output);
+            format_container_summary(c2, &secret_names, &mut output);
         }
     }
 
     // Modified containers
     for (name, c1) in &containers1 {
         if let Some(c2) = containers2.get(name) {
-            let container_diff = diff_container(c1, c2);
+            let container_diff = diff_container(c1, c2, &secret_names);
             if !container_diff.is_empty() {
                 let _ = writeln!(output, "\n=== Container: {name} ===");
                 output.push_str(&container_diff);
@@ -86,7 +103,11 @@ fn diff_task_definitions(td1: &TaskDefinition, td2: &TaskDefinition) -> String {
 }
 
 /// Format a summary of a container (for added containers).
-fn format_container_summary(c: &crate::taskdef::ContainerDefinition, output: &mut String) {
+fn format_container_summary(
+    c: &crate::taskdef::ContainerDefinition,
+    secret_names: &HashSet<String>,
+    output: &mut String,
+) {
     let _ = writeln!(output, "  image: {}", c.image);
     if !c.essential {
         let _ = writeln!(output, "  essential: false");
@@ -98,7 +119,8 @@ fn format_container_summary(c: &crate::taskdef::ContainerDefinition, output: &mu
         let _ = writeln!(output, "  entryPoint: {}", c.entry_point.join(" "));
     }
     for env in &c.environment {
-        let _ = writeln!(output, "  environment: {}={}", env.name, env.value);
+        let val = mask_value(&env.name, &env.value, secret_names);
+        let _ = writeln!(output, "  environment: {}={}", env.name, val);
     }
     for pm in &c.port_mappings {
         let _ = writeln!(output, "  portMappings: {}", format_port_mapping(pm));
@@ -116,6 +138,7 @@ fn format_container_summary(c: &crate::taskdef::ContainerDefinition, output: &mu
 fn diff_container(
     c1: &crate::taskdef::ContainerDefinition,
     c2: &crate::taskdef::ContainerDefinition,
+    secret_names: &HashSet<String>,
 ) -> String {
     let mut output = String::new();
 
@@ -145,7 +168,7 @@ fn diff_container(
         );
     }
 
-    diff_environment(&c1.environment, &c2.environment, &mut output);
+    diff_environment(&c1.environment, &c2.environment, secret_names, &mut output);
     diff_port_mappings(&c1.port_mappings, &c2.port_mappings, &mut output);
     diff_depends_on(&c1.depends_on, &c2.depends_on, &mut output);
     diff_health_check(
@@ -180,9 +203,19 @@ fn format_optional_u32(val: Option<u32>) -> String {
     val.map_or_else(|| "(none)".to_string(), |v| v.to_string())
 }
 
+/// Mask an environment variable value if the name is in the secret set.
+fn mask_value<'a>(name: &str, value: &'a str, secret_names: &HashSet<String>) -> &'a str {
+    if secret_names.contains(name) {
+        "******"
+    } else {
+        value
+    }
+}
+
 fn diff_environment(
     env1: &[crate::taskdef::Environment],
     env2: &[crate::taskdef::Environment],
+    secret_names: &HashSet<String>,
     output: &mut String,
 ) {
     let left: BTreeMap<&str, &str> = env1
@@ -196,13 +229,15 @@ fn diff_environment(
 
     for (name, val) in &left {
         if !right.contains_key(name) {
-            let _ = writeln!(output, "  - environment: {name}={val}");
+            let masked = mask_value(name, val, secret_names);
+            let _ = writeln!(output, "  - environment: {name}={masked}");
         }
     }
 
     for (name, val) in &right {
         if !left.contains_key(name) {
-            let _ = writeln!(output, "  + environment: {name}={val}");
+            let masked = mask_value(name, val, secret_names);
+            let _ = writeln!(output, "  + environment: {name}={masked}");
         }
     }
 
@@ -210,7 +245,9 @@ fn diff_environment(
         if let Some(val2) = right.get(name)
             && val1 != val2
         {
-            let _ = writeln!(output, "  ~ environment: {name}: {val1} → {val2}");
+            let m1 = mask_value(name, val1, secret_names);
+            let m2 = mask_value(name, val2, secret_names);
+            let _ = writeln!(output, "  ~ environment: {name}: {m1} → {m2}");
         }
     }
 }
@@ -229,27 +266,28 @@ fn diff_port_mappings(
     ports2: &[crate::taskdef::PortMapping],
     output: &mut String,
 ) {
-    let left: BTreeMap<u16, &crate::taskdef::PortMapping> =
-        ports1.iter().map(|p| (p.container_port, p)).collect();
-    let right: BTreeMap<u16, &crate::taskdef::PortMapping> =
-        ports2.iter().map(|p| (p.container_port, p)).collect();
+    let key = |p: &crate::taskdef::PortMapping| (p.container_port, p.protocol.clone());
+    let left: BTreeMap<_, &crate::taskdef::PortMapping> =
+        ports1.iter().map(|p| (key(p), p)).collect();
+    let right: BTreeMap<_, &crate::taskdef::PortMapping> =
+        ports2.iter().map(|p| (key(p), p)).collect();
 
-    for cp in left.keys() {
-        if !right.contains_key(cp) {
-            let formatted = format_port_mapping(left[cp]);
+    for k in left.keys() {
+        if !right.contains_key(k) {
+            let formatted = format_port_mapping(left[k]);
             let _ = writeln!(output, "  - portMappings: {formatted}");
         }
     }
 
-    for cp in right.keys() {
-        if !left.contains_key(cp) {
-            let formatted = format_port_mapping(right[cp]);
+    for k in right.keys() {
+        if !left.contains_key(k) {
+            let formatted = format_port_mapping(right[k]);
             let _ = writeln!(output, "  + portMappings: {formatted}");
         }
     }
 
-    for (cp, p1) in &left {
-        if let Some(p2) = right.get(cp) {
+    for (k, p1) in &left {
+        if let Some(p2) = right.get(k) {
             let old = format_port_mapping(p1);
             let new = format_port_mapping(p2);
             if old != new {
@@ -882,5 +920,112 @@ mod tests {
         }"#;
         let result = diff_from_json(json1, json2).expect("should succeed");
         assert!(result.contains("~ healthCheck.timeout: 5s → 10s"));
+    }
+
+    #[test]
+    fn secret_env_values_are_masked() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environment": [
+                    { "name": "DB_PASSWORD", "value": "s3cret" },
+                    { "name": "PORT", "value": "8080" }
+                ],
+                "secrets": [
+                    { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:db" }
+                ],
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environment": [
+                    { "name": "DB_PASSWORD", "value": "n3w-s3cret" },
+                    { "name": "PORT", "value": "9090" }
+                ],
+                "secrets": [
+                    { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:db" }
+                ],
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        // Secret values should be masked
+        assert!(result.contains("~ environment: DB_PASSWORD: ****** → ******"));
+        assert!(!result.contains("s3cret"));
+        assert!(!result.contains("n3w-s3cret"));
+        // Non-secret values should be visible
+        assert!(result.contains("~ environment: PORT: 8080 → 9090"));
+    }
+
+    #[test]
+    fn secret_env_added_removed_masked() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environment": [
+                    { "name": "API_KEY", "value": "key123" }
+                ],
+                "secrets": [
+                    { "name": "API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:key" }
+                ],
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environment": [
+                    { "name": "TOKEN", "value": "tok456" }
+                ],
+                "secrets": [
+                    { "name": "TOKEN", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:tok" }
+                ],
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("- environment: API_KEY=******"));
+        assert!(!result.contains("key123"));
+        assert!(result.contains("+ environment: TOKEN=******"));
+        assert!(!result.contains("tok456"));
+    }
+
+    #[test]
+    fn port_mapping_same_port_different_protocol() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "portMappings": [
+                    { "containerPort": 53, "protocol": "tcp" },
+                    { "containerPort": 53, "protocol": "udp" }
+                ]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "portMappings": [
+                    { "containerPort": 53, "protocol": "tcp" }
+                ]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        // UDP mapping removed, TCP mapping unchanged
+        assert!(result.contains("- portMappings: 53:53/udp"));
+        assert!(!result.contains("tcp"));
     }
 }
