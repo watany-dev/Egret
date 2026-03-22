@@ -11,11 +11,16 @@ pub async fn execute(args: &LogsArgs, host: Option<&str>) -> Result<()> {
     let client = ContainerClient::connect(host).await?;
     let containers = client.list_containers(None).await?;
 
-    let container = find_container(&containers, &args.container).ok_or_else(|| {
-        anyhow::anyhow!(
+    let container = find_container(&containers, &args.container).map_err(|e| match e {
+        FindContainerError::NotFound => anyhow::anyhow!(
             "No container found matching '{}'. Use 'egret ps' to list running containers.",
             args.container
-        )
+        ),
+        FindContainerError::Ambiguous(names) => anyhow::anyhow!(
+            "Ambiguous container name '{}'. Matching containers: {}",
+            args.container,
+            names
+        ),
     })?;
 
     let id = container.id.clone();
@@ -34,15 +39,39 @@ pub async fn execute(args: &LogsArgs, host: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Find a container by name (exact match → contains fallback).
-fn find_container<'a>(containers: &'a [ContainerInfo], query: &str) -> Option<&'a ContainerInfo> {
+/// Find a container by name (exact match → unambiguous partial match).
+///
+/// Returns an error when multiple containers partially match the query.
+fn find_container<'a>(
+    containers: &'a [ContainerInfo],
+    query: &str,
+) -> Result<&'a ContainerInfo, FindContainerError> {
     // 1. Exact match
     if let Some(c) = containers.iter().find(|c| c.name == query) {
-        return Some(c);
+        return Ok(c);
     }
 
-    // 2. Contains fallback
-    containers.iter().find(|c| c.name.contains(query))
+    // 2. Partial match — reject if ambiguous
+    let matches: Vec<&ContainerInfo> = containers
+        .iter()
+        .filter(|c| c.name.contains(query))
+        .collect();
+
+    match matches.len() {
+        0 => Err(FindContainerError::NotFound),
+        1 => Ok(matches[0]),
+        _ => {
+            let names: Vec<&str> = matches.iter().map(|c| c.name.as_str()).collect();
+            Err(FindContainerError::Ambiguous(names.join(", ")))
+        }
+    }
+}
+
+/// Errors returned by [`find_container`].
+#[derive(Debug)]
+enum FindContainerError {
+    NotFound,
+    Ambiguous(String),
 }
 
 #[cfg(test)]
@@ -84,7 +113,7 @@ mod tests {
     fn find_container_not_found() {
         let containers = vec![container_info("my-app-web")];
         let result = find_container(&containers, "nonexistent");
-        assert!(result.is_none());
+        assert!(matches!(result, Err(FindContainerError::NotFound)));
     }
 
     #[test]
@@ -92,5 +121,15 @@ mod tests {
         let containers = vec![container_info("app"), container_info("my-app-app")];
         let result = find_container(&containers, "app");
         assert_eq!(result.unwrap().name, "app");
+    }
+
+    #[test]
+    fn find_container_ambiguous_partial_match() {
+        let containers = vec![
+            container_info("my-app-web"),
+            container_info("my-app-worker"),
+        ];
+        let result = find_container(&containers, "my-app");
+        assert!(matches!(result, Err(FindContainerError::Ambiguous(_))));
     }
 }
