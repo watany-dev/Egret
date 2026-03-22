@@ -227,7 +227,7 @@ async fn stream_logs_until_signal(client: &Arc<ContainerClient>, containers: &[(
         let color = container_color(i).to_string();
 
         handles.push(tokio::spawn(async move {
-            let mut stream = client.stream_logs(&id);
+            let mut stream = client.stream_logs(&id, true);
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(line) => println!("{}", format_log_line(&name, &line, &color)),

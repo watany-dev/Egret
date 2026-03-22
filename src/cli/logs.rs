@@ -20,8 +20,7 @@ pub async fn execute(args: &LogsArgs, host: Option<&str>) -> Result<()> {
 
     let id = container.id.clone();
 
-    // stream_logs uses follow mode; for non-follow we read until the stream ends
-    let mut stream = client.stream_logs(&id);
+    let mut stream = client.stream_logs(&id, args.follow);
     while let Some(result) = stream.next().await {
         match result {
             Ok(line) => println!("{line}"),

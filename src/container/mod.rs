@@ -246,13 +246,20 @@ impl ContainerClient {
         Ok(Self { docker })
     }
 
-    /// Stream container logs (follow mode).
-    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, ContainerError>> + '_ {
+    /// Stream container logs.
+    ///
+    /// When `follow` is `true` the stream stays open (like `docker logs -f`).
+    /// When `false` it returns existing logs and ends.
+    pub fn stream_logs(
+        &self,
+        id: &str,
+        follow: bool,
+    ) -> impl Stream<Item = Result<String, ContainerError>> + '_ {
         self.docker
             .logs(
                 id,
                 Some(LogsOptions::<String> {
-                    follow: true,
+                    follow,
                     stdout: true,
                     stderr: true,
                     ..Default::default()
