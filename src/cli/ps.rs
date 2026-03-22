@@ -453,6 +453,17 @@ mod tests {
             .expect("should succeed");
     }
 
+    #[test]
+    fn format_uptime_invalid_timestamp() {
+        assert_eq!(format_uptime("not-a-timestamp"), "-");
+    }
+
+    #[test]
+    fn format_uptime_future_timestamp() {
+        // A future timestamp should produce negative duration → "-"
+        assert_eq!(format_uptime("2099-01-01T00:00:00Z"), "-");
+    }
+
     #[tokio::test]
     async fn ps_json_output() {
         let mock = MockContainerClient {

@@ -668,4 +668,219 @@ mod tests {
         let result = diff_from_json(json1, &json2).expect("should succeed");
         assert!(result.contains("- healthCheck: (removed)"));
     }
+
+    #[test]
+    fn container_added_with_details() {
+        let json1 = minimal_json("test");
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest", "portMappings": [{ "containerPort": 80, "hostPort": 8080 }] },
+                {
+                    "name": "worker",
+                    "image": "worker:latest",
+                    "essential": false,
+                    "command": ["python", "worker.py"],
+                    "entryPoint": ["/bin/sh", "-c"],
+                    "environment": [{ "name": "MODE", "value": "prod" }],
+                    "portMappings": [{ "containerPort": 3000 }],
+                    "dependsOn": [{ "containerName": "app", "condition": "START" }]
+                }
+            ]
+        }"#;
+        let result = diff_from_json(&json1, json2).expect("should succeed");
+        assert!(result.contains("Container: worker (added)"));
+        assert!(result.contains("essential: false"));
+        assert!(result.contains("command: python worker.py"));
+        assert!(result.contains("entryPoint: /bin/sh -c"));
+        assert!(result.contains("environment: MODE=prod"));
+        assert!(result.contains("portMappings:"));
+        assert!(result.contains("dependsOn: app"));
+    }
+
+    #[test]
+    fn command_and_entrypoint_change() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "command": ["old-cmd"],
+                "entryPoint": ["/bin/sh"],
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "command": ["new-cmd", "--flag"],
+                "entryPoint": ["/bin/bash"],
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("command:"));
+        assert!(result.contains("entryPoint:"));
+    }
+
+    #[test]
+    fn port_mapping_added_and_removed() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "portMappings": [{ "containerPort": 443 }]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("- portMappings:"));
+        assert!(result.contains("+ portMappings:"));
+    }
+
+    #[test]
+    fn depends_on_added_and_removed() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "db", "image": "postgres:15", "essential": true },
+                { "name": "cache", "image": "redis:7", "essential": true },
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "dependsOn": [{ "containerName": "db", "condition": "START" }],
+                    "portMappings": [{ "containerPort": 80 }]
+                }
+            ]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "db", "image": "postgres:15", "essential": true },
+                { "name": "cache", "image": "redis:7", "essential": true },
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "dependsOn": [{ "containerName": "cache", "condition": "START" }],
+                    "portMappings": [{ "containerPort": 80 }]
+                }
+            ]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("- dependsOn: db"));
+        assert!(result.contains("+ dependsOn: cache"));
+    }
+
+    #[test]
+    fn mount_points_added_removed_changed() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "mountPoints": [
+                    { "sourceVolume": "logs", "containerPath": "/var/log", "readOnly": false },
+                    { "sourceVolume": "config", "containerPath": "/etc/old", "readOnly": false }
+                ],
+                "portMappings": [{ "containerPort": 80 }]
+            }],
+            "volumes": [
+                { "name": "logs", "host": { "sourcePath": "/tmp/logs" } },
+                { "name": "config", "host": { "sourcePath": "/tmp/config" } },
+                { "name": "data", "host": { "sourcePath": "/tmp/data" } }
+            ]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "mountPoints": [
+                    { "sourceVolume": "config", "containerPath": "/etc/new", "readOnly": true },
+                    { "sourceVolume": "data", "containerPath": "/data", "readOnly": false }
+                ],
+                "portMappings": [{ "containerPort": 80 }]
+            }],
+            "volumes": [
+                { "name": "logs", "host": { "sourcePath": "/tmp/logs" } },
+                { "name": "config", "host": { "sourcePath": "/tmp/config" } },
+                { "name": "data", "host": { "sourcePath": "/tmp/data" } }
+            ]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("- mountPoints: logs"));
+        assert!(result.contains("+ mountPoints: data"));
+        assert!(result.contains("~ mountPoints: config: /etc/old → /etc/new"));
+        assert!(result.contains("~ mountPoints: config: readOnly false → true"));
+    }
+
+    #[test]
+    fn memory_reservation_change() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "memoryReservation": 256,
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "memoryReservation": 512,
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("memoryReservation: 256 → 512"));
+    }
+
+    #[test]
+    fn health_check_timeout_change() {
+        let json1 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "healthCheck": {
+                    "command": ["CMD-SHELL", "curl -f http://localhost/"],
+                    "interval": 30,
+                    "timeout": 5,
+                    "retries": 3,
+                    "startPeriod": 0
+                },
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let json2 = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "healthCheck": {
+                    "command": ["CMD-SHELL", "curl -f http://localhost/"],
+                    "interval": 30,
+                    "timeout": 10,
+                    "retries": 3,
+                    "startPeriod": 0
+                },
+                "portMappings": [{ "containerPort": 80 }]
+            }]
+        }"#;
+        let result = diff_from_json(json1, json2).expect("should succeed");
+        assert!(result.contains("~ healthCheck.timeout: 5s → 10s"));
+    }
 }
