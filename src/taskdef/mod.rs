@@ -331,6 +331,27 @@ impl TaskDefinition {
         Ok(())
     }
 
+    /// Validate that a path is absolute and does not contain parent directory traversal.
+    fn validate_path_safety(
+        path: &str,
+        field_name: &str,
+        context: &str,
+    ) -> Result<(), TaskDefError> {
+        if !path.starts_with('/') {
+            return Err(TaskDefError::Validation(format!(
+                "{context}: {field_name} must be an absolute path, got '{path}'"
+            )));
+        }
+        for component in std::path::Path::new(path).components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(TaskDefError::Validation(format!(
+                    "{context}: {field_name} must not contain '..' path traversal, got '{path}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Validate `mountPoints` references against task-level `volumes`.
     fn validate_mount_points(&self) -> Result<(), TaskDefError> {
         let volume_names: HashSet<&str> = self.volumes.iter().map(|v| v.name.as_str()).collect();
@@ -349,18 +370,31 @@ impl TaskDefinition {
                         container.name, mp.source_volume
                     )));
                 }
+                Self::validate_path_safety(
+                    &mp.container_path,
+                    "containerPath",
+                    &format!(
+                        "container '{}', volume '{}'",
+                        container.name, mp.source_volume
+                    ),
+                )?;
             }
         }
 
-        // Validate host.source_path is not empty when host is present
+        // Validate host.source_path when host is present
         for volume in &self.volumes {
-            if let Some(host) = &volume.host
-                && host.source_path.is_empty()
-            {
-                return Err(TaskDefError::Validation(format!(
-                    "volume '{}' has empty host.sourcePath",
-                    volume.name
-                )));
+            if let Some(host) = &volume.host {
+                if host.source_path.is_empty() {
+                    return Err(TaskDefError::Validation(format!(
+                        "volume '{}' has empty host.sourcePath",
+                        volume.name
+                    )));
+                }
+                Self::validate_path_safety(
+                    &host.source_path,
+                    "host.sourcePath",
+                    &format!("volume '{}'", volume.name),
+                )?;
             }
         }
 
@@ -1118,5 +1152,128 @@ mod tests {
             matches!(err, TaskDefError::Validation(ref msg) if msg.contains("empty host.sourcePath")),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn validate_source_path_relative_rejected() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "relative/path" } }
+            ],
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("must be an absolute path")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_source_path_traversal_rejected() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "/safe/../../etc/shadow" } }
+            ],
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("must not contain '..' path traversal")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_source_path_bare_traversal_rejected() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "../../../etc" } }
+            ],
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("must be an absolute path")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_path_relative_rejected() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "/data" } }
+            ],
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "data", "containerPath": "relative" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("must be an absolute path")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_path_traversal_rejected() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "/data" } }
+            ],
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "data", "containerPath": "/app/../escape" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("must not contain '..' path traversal")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_path_with_dot_allowed() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "/path/./with/dot" } }
+            ],
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "data", "containerPath": "/app/./data" }
+                    ]
+                }
+            ]
+        }"#;
+        let result = TaskDefinition::from_json(json);
+        assert!(result.is_ok(), "single dot in path should be allowed");
     }
 }

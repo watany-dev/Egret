@@ -41,6 +41,8 @@ pub struct ServerState {
     pub credentials: Option<AwsCredentials>,
     /// Mapping from container name to Docker container ID (populated after creation).
     pub container_ids: HashMap<String, String>,
+    /// Authorization token for the credentials endpoint.
+    pub auth_token: String,
 }
 
 /// Task-level metadata (ECS v4 `/task` response).
@@ -275,6 +277,36 @@ pub async fn update_container_id(state: &SharedState, name: &str, docker_id: &st
     }
 }
 
+/// Generate an authorization token for the credentials endpoint.
+///
+/// Uses `RandomState` (`SipHash` with random keys) from the standard library
+/// combined with the current timestamp to produce a unique hex token.
+/// Cryptographic strength is not required — the purpose is process-level
+/// isolation on localhost, not network-level security (127.0.0.1 binding
+/// already prevents remote access).
+#[allow(dead_code)]
+pub fn generate_auth_token() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let state = RandomState::new();
+    let mut hasher = state.build_hasher();
+    hasher.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    );
+    let h1 = hasher.finish();
+
+    let state2 = RandomState::new();
+    let mut hasher2 = state2.build_hasher();
+    hasher2.write_u64(h1);
+    let h2 = hasher2.finish();
+
+    format!("{h1:016x}{h2:016x}")
+}
+
 /// Maximum request body size (1 MB).
 const MAX_BODY_SIZE: usize = 1_024 * 1_024;
 
@@ -300,8 +332,21 @@ async fn health_handler() -> StatusCode {
 }
 
 #[allow(dead_code)]
-async fn credentials_handler(State(state): State<SharedState>) -> impl IntoResponse {
+async fn credentials_handler(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
     let state = state.read().await;
+
+    let authorized = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == state.auth_token);
+
+    if !authorized {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     state.credentials.as_ref().map_or_else(
         || StatusCode::NOT_FOUND.into_response(),
         |creds| (StatusCode::OK, Json(serde_json::to_value(creds).ok())).into_response(),
@@ -622,6 +667,7 @@ mod tests {
             container_metadata,
             credentials,
             container_ids: HashMap::new(),
+            auth_token: "test-auth-token".to_string(),
         }))
     }
 
@@ -632,6 +678,10 @@ mod tests {
             .await
             .expect("should start");
         (server.port, state, server)
+    }
+
+    fn http_client() -> reqwest::Client {
+        reqwest::Client::new()
     }
 
     #[tokio::test]
@@ -699,9 +749,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn credentials_endpoint_returns_json() {
+    async fn credentials_endpoint_returns_json_with_valid_token() {
         let (port, _, server) = start_test_server(true).await;
-        let resp = reqwest::get(format!("http://127.0.0.1:{port}/credentials"))
+        let resp = http_client()
+            .get(format!("http://127.0.0.1:{port}/credentials"))
+            .header("Authorization", "test-auth-token")
+            .send()
             .await
             .expect("should connect");
         assert_eq!(resp.status(), 200);
@@ -711,9 +764,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn credentials_endpoint_returns_401_without_token() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:{port}/credentials"))
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 401);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn credentials_endpoint_returns_401_with_wrong_token() {
+        let (port, _, server) = start_test_server(true).await;
+        let resp = http_client()
+            .get(format!("http://127.0.0.1:{port}/credentials"))
+            .header("Authorization", "wrong-token")
+            .send()
+            .await
+            .expect("should connect");
+        assert_eq!(resp.status(), 401);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn credentials_endpoint_returns_404_when_none() {
         let (port, _, server) = start_test_server(false).await;
-        let resp = reqwest::get(format!("http://127.0.0.1:{port}/credentials"))
+        let resp = http_client()
+            .get(format!("http://127.0.0.1:{port}/credentials"))
+            .header("Authorization", "test-auth-token")
+            .send()
             .await
             .expect("should connect");
         assert_eq!(resp.status(), 404);
@@ -753,6 +832,23 @@ mod tests {
             .expect("should connect");
         assert_eq!(resp.status(), 501);
         server.shutdown().await;
+    }
+
+    #[test]
+    fn generate_auth_token_is_nonempty_hex() {
+        let token = generate_auth_token();
+        assert_eq!(token.len(), 32);
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit()),
+            "token should be hex: {token}"
+        );
+    }
+
+    #[test]
+    fn generate_auth_token_is_unique() {
+        let t1 = generate_auth_token();
+        let t2 = generate_auth_token();
+        assert_ne!(t1, t2, "consecutive tokens should differ");
     }
 
     #[tokio::test]

@@ -69,7 +69,13 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     };
 
     let metadata_port = metadata_server.as_ref().map(|s| s.port);
-    let (network_name, containers) = run_task(&*client, &task_def, metadata_port).await?;
+    let auth_token = if let Some(state) = &metadata_state {
+        Some(state.read().await.auth_token.clone())
+    } else {
+        None
+    };
+    let (network_name, containers) =
+        run_task(&*client, &task_def, metadata_port, auth_token.as_deref()).await?;
 
     // Update container IDs in metadata server state
     if let Some(state) = &metadata_state {
@@ -98,6 +104,7 @@ pub async fn run_task(
     client: &(impl ContainerRuntime + ?Sized),
     task_def: &TaskDefinition,
     metadata_port: Option<u16>,
+    auth_token: Option<&str>,
 ) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
@@ -112,6 +119,7 @@ pub async fn run_task(
                 &network_name,
                 metadata_port,
                 &task_def.volumes,
+                auth_token,
             );
             ContainerSpec {
                 name: def.name.clone(),
@@ -161,11 +169,15 @@ async fn start_metadata_server(task_def: &TaskDefinition) -> Result<(MetadataSer
         })
         .collect();
 
+    let auth_token = metadata::generate_auth_token();
+    tracing::debug!("Generated credentials auth token");
+
     let state = Arc::new(tokio::sync::RwLock::new(ServerState {
         task_metadata,
         container_metadata,
         credentials: aws_creds,
         container_ids: HashMap::new(),
+        auth_token,
     }));
 
     let server = MetadataServer::start(state.clone()).await?;
@@ -278,12 +290,14 @@ fn resolve_binds(mount_points: &[MountPoint], volumes: &[Volume]) -> Vec<String>
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_container_config(
     family: &str,
     def: &ContainerDefinition,
     network: &str,
     metadata_port: Option<u16>,
     volumes: &[Volume],
+    auth_token: Option<&str>,
 ) -> ContainerConfig {
     let labels = HashMap::from([
         ("egret.managed".into(), "true".into()),
@@ -305,6 +319,9 @@ fn build_container_config(
         env.push(format!(
             "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://host.docker.internal:{port}/credentials"
         ));
+        if let Some(token) = auth_token {
+            env.push(format!("AWS_CONTAINER_AUTHORIZATION_TOKEN={token}"));
+        }
     }
 
     let port_mappings = def
@@ -440,7 +457,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let (network, containers) = run_task(&mock, &task_def, None)
+        let (network, containers) = run_task(&mock, &task_def, None, None)
             .await
             .expect("should succeed");
 
@@ -463,7 +480,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let (_, containers) = run_task(&mock, &task_def, None)
+        let (_, containers) = run_task(&mock, &task_def, None, None)
             .await
             .expect("should succeed");
 
@@ -482,7 +499,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let result = run_task(&mock, &task_def, None).await;
+        let result = run_task(&mock, &task_def, None, None).await;
         assert!(result.is_err());
     }
 
@@ -499,7 +516,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let result = run_task(&mock, &task_def, None).await;
+        let result = run_task(&mock, &task_def, None, None).await;
         assert!(result.is_err());
     }
 
@@ -573,7 +590,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("my-app", &def, "egret-my-app", None, &[]);
+        let config = build_container_config("my-app", &def, "egret-my-app", None, &[], None);
 
         assert_eq!(config.name, "my-app-app");
         assert_eq!(config.image, "nginx:latest");
@@ -614,7 +631,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[]);
+        let config = build_container_config("test", &def, "egret-test", None, &[], None);
 
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
@@ -640,7 +657,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[]);
+        let config = build_container_config("test", &def, "egret-test", None, &[], None);
         assert_eq!(
             config.extra_hosts,
             vec!["host.docker.internal:host-gateway"]
@@ -666,7 +683,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[]);
+        let config = build_container_config("test", &def, "egret-test", None, &[], None);
 
         assert!(config.command.is_empty());
         assert!(config.entry_point.is_empty());
@@ -693,7 +710,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", Some(12345), &[]);
+        let config = build_container_config("test", &def, "egret-test", Some(12345), &[], None);
 
         assert!(config.env.contains(
             &"ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:12345/v4/app".to_string()
@@ -703,6 +720,70 @@ mod tests {
                 &"AWS_CONTAINER_CREDENTIALS_FULL_URI=http://host.docker.internal:12345/credentials"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn build_container_config_with_auth_token() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
+            mount_points: vec![],
+        };
+
+        let config = build_container_config(
+            "test",
+            &def,
+            "egret-test",
+            Some(12345),
+            &[],
+            Some("my-secret-token"),
+        );
+
+        assert!(
+            config
+                .env
+                .contains(&"AWS_CONTAINER_AUTHORIZATION_TOKEN=my-secret-token".to_string())
+        );
+    }
+
+    #[test]
+    fn build_container_config_without_auth_token() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
+            mount_points: vec![],
+        };
+
+        let config = build_container_config("test", &def, "egret-test", Some(12345), &[], None);
+
+        assert!(
+            !config
+                .env
+                .iter()
+                .any(|e| e.starts_with("AWS_CONTAINER_AUTHORIZATION_TOKEN="))
         );
     }
 
@@ -725,7 +806,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[]);
+        let config = build_container_config("test", &def, "egret-test", None, &[], None);
 
         assert!(
             !config
@@ -791,7 +872,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[]);
+        let config = build_container_config("test", &def, "egret-test", None, &[], None);
         let hc = config
             .health_check
             .as_ref()
@@ -859,7 +940,7 @@ mod tests {
             ],
         };
 
-        let (network, containers) = run_task(&mock, &task_def, None)
+        let (network, containers) = run_task(&mock, &task_def, None, None)
             .await
             .expect("should succeed");
 
@@ -966,7 +1047,7 @@ mod tests {
             }],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &volumes);
+        let config = build_container_config("test", &def, "egret-test", None, &volumes, None);
         assert_eq!(config.binds, vec!["/host/data:/app/data"]);
     }
 
