@@ -44,7 +44,11 @@ pub struct ValidationDiagnostic {
 
 impl fmt::Display for ValidationDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {} - {}", self.severity, self.field_path, self.message)?;
+        write!(
+            f,
+            "{}: {} - {}",
+            self.severity, self.field_path, self.message
+        )?;
         if let Some(suggestion) = &self.suggestion {
             write!(f, " (hint: {suggestion})")?;
         }
@@ -91,10 +95,7 @@ impl fmt::Display for ValidationReport {
         }
         let errors = self.error_count();
         let warnings = self.warning_count();
-        write!(
-            f,
-            "{errors} error(s), {warnings} warning(s)"
-        )
+        write!(f, "{errors} error(s), {warnings} warning(s)")
     }
 }
 
@@ -150,11 +151,7 @@ pub fn validate_overrides(
             message: format!("override references unknown container '{name}'"),
             suggestion: Some(format!(
                 "available containers: {}",
-                names
-                    .iter()
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                names.iter().copied().collect::<Vec<_>>().join(", ")
             )),
         })
         .collect()
@@ -175,7 +172,7 @@ fn check_image_format(image: &str, field_path: &str) -> Option<ValidationDiagnos
         });
     }
 
-    if image.chars().any(|c| c.is_whitespace()) {
+    if image.chars().any(char::is_whitespace) {
         return Some(ValidationDiagnostic {
             severity: Severity::Error,
             field_path: field_path.to_string(),
@@ -212,17 +209,15 @@ fn check_image_format(image: &str, field_path: &str) -> Option<ValidationDiagnos
     }
 
     // Must start with an alphanumeric character.
-    if let Some(first) = image.chars().next() {
-        if !first.is_ascii_alphanumeric() {
-            return Some(ValidationDiagnostic {
-                severity: Severity::Error,
-                field_path: field_path.to_string(),
-                message: format!(
-                    "image name '{image}' must start with an alphanumeric character"
-                ),
-                suggestion: None,
-            });
-        }
+    if let Some(first) = image.chars().next()
+        && !first.is_ascii_alphanumeric()
+    {
+        return Some(ValidationDiagnostic {
+            severity: Severity::Error,
+            field_path: field_path.to_string(),
+            message: format!("image name '{image}' must start with an alphanumeric character"),
+            suggestion: None,
+        });
     }
 
     None
@@ -339,10 +334,7 @@ fn check_common_mistakes(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic>
 
     // All containers have essential=false
     if !task_def.container_definitions.is_empty()
-        && task_def
-            .container_definitions
-            .iter()
-            .all(|c| !c.essential)
+        && task_def.container_definitions.iter().all(|c| !c.essential)
     {
         diagnostics.push(ValidationDiagnostic {
             severity: Severity::Warning,
@@ -363,7 +355,9 @@ fn check_common_mistakes(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic>
             severity: Severity::Warning,
             field_path: "containerDefinitions.portMappings".to_string(),
             message: "no port mappings defined in any container".to_string(),
-            suggestion: Some("add port mappings if you need to access containers from the host".to_string()),
+            suggestion: Some(
+                "add port mappings if you need to access containers from the host".to_string(),
+            ),
         });
     }
 
@@ -599,7 +593,8 @@ mod tests {
 
     #[test]
     fn port_conflicts_none() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -617,13 +612,15 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         assert!(check_port_conflicts(&td).is_empty());
     }
 
     #[test]
     fn port_conflicts_same_host_port_different_protocol_ok() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -635,13 +632,15 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         assert!(check_port_conflicts(&td).is_empty());
     }
 
     #[test]
     fn port_conflicts_same_host_port_same_protocol() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -653,7 +652,8 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let conflicts = check_port_conflicts(&td);
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].severity, Severity::Error);
@@ -662,7 +662,8 @@ mod tests {
 
     #[test]
     fn port_conflicts_across_containers() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -680,7 +681,8 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let conflicts = check_port_conflicts(&td);
         assert_eq!(conflicts.len(), 1);
         assert!(conflicts[0].message.contains("web"));
@@ -690,7 +692,8 @@ mod tests {
 
     #[test]
     fn validate_extended_valid_task() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -699,14 +702,16 @@ mod tests {
                     "portMappings": [{ "containerPort": 80, "hostPort": 8080 }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let report = validate_extended(&td);
         assert!(!report.has_errors());
     }
 
     #[test]
     fn validate_extended_catches_image_and_port_issues() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -718,7 +723,8 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let report = validate_extended(&td);
         assert_eq!(report.error_count(), 2);
     }
@@ -727,7 +733,8 @@ mod tests {
     fn port_conflicts_host_port_defaults_to_container_port() {
         // When hostPort is omitted, it defaults to containerPort.
         // Two containers both mapping containerPort=80 without hostPort should conflict.
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -741,7 +748,8 @@ mod tests {
                     "portMappings": [{ "containerPort": 80 }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let conflicts = check_port_conflicts(&td);
         assert_eq!(conflicts.len(), 1);
     }
@@ -750,7 +758,8 @@ mod tests {
 
     #[test]
     fn depends_on_valid_references() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -764,14 +773,16 @@ mod tests {
                     "dependsOn": [{ "containerName": "db", "condition": "HEALTHY" }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_depends_on(&td);
         assert!(diags.is_empty());
     }
 
     #[test]
     fn depends_on_unknown_reference() {
-        let td = make_task_def_unchecked(r#"{
+        let td = make_task_def_unchecked(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -780,15 +791,20 @@ mod tests {
                     "dependsOn": [{ "containerName": "nonexistent", "condition": "START" }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_depends_on(&td);
-        assert!(diags.iter().any(|d| d.severity == Severity::Error
-            && d.message.contains("unknown container")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Error && d.message.contains("unknown container"))
+        );
     }
 
     #[test]
     fn depends_on_self_reference() {
-        let td = make_task_def_unchecked(r#"{
+        let td = make_task_def_unchecked(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -797,15 +813,20 @@ mod tests {
                     "dependsOn": [{ "containerName": "app", "condition": "START" }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_depends_on(&td);
-        assert!(diags.iter().any(|d| d.severity == Severity::Error
-            && d.message.contains("self-referencing")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Error && d.message.contains("self-referencing"))
+        );
     }
 
     #[test]
     fn depends_on_circular_two_nodes() {
-        let td = make_task_def_unchecked(r#"{
+        let td = make_task_def_unchecked(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -819,15 +840,20 @@ mod tests {
                     "dependsOn": [{ "containerName": "a", "condition": "START" }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_depends_on(&td);
-        assert!(diags.iter().any(|d| d.severity == Severity::Error
-            && d.message.contains("cyclic")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Error && d.message.contains("cyclic"))
+        );
     }
 
     #[test]
     fn depends_on_circular_three_nodes() {
-        let td = make_task_def_unchecked(r#"{
+        let td = make_task_def_unchecked(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -846,17 +872,22 @@ mod tests {
                     "dependsOn": [{ "containerName": "b", "condition": "START" }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_depends_on(&td);
-        assert!(diags.iter().any(|d| d.severity == Severity::Error
-            && d.message.contains("cyclic")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Error && d.message.contains("cyclic"))
+        );
     }
 
     // --- Secret ARN format tests ---
 
     #[test]
     fn secret_arn_valid() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -867,13 +898,15 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         assert!(check_secret_arn_format(&td).is_empty());
     }
 
     #[test]
     fn secret_arn_invalid_prefix() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -884,7 +917,8 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_secret_arn_format(&td);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Severity::Warning);
@@ -893,7 +927,8 @@ mod tests {
 
     #[test]
     fn secret_arn_incomplete() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -904,7 +939,8 @@ mod tests {
                     ]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_secret_arn_format(&td);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("incomplete"));
@@ -912,12 +948,14 @@ mod tests {
 
     #[test]
     fn secret_arn_no_secrets_no_warnings() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "app", "image": "alpine:latest" }
             ]
-        }"#);
+        }"#,
+        );
         assert!(check_secret_arn_format(&td).is_empty());
     }
 
@@ -925,33 +963,38 @@ mod tests {
 
     #[test]
     fn common_mistakes_all_essential_false() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "a", "image": "alpine:latest", "essential": false },
                 { "name": "b", "image": "alpine:latest", "essential": false }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_common_mistakes(&td);
         assert!(diags.iter().any(|d| d.message.contains("essential=false")));
     }
 
     #[test]
     fn common_mistakes_no_port_mappings() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "a", "image": "alpine:latest" },
                 { "name": "b", "image": "alpine:latest" }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_common_mistakes(&td);
         assert!(diags.iter().any(|d| d.message.contains("no port mappings")));
     }
 
     #[test]
     fn common_mistakes_normal_task_no_warnings() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -961,20 +1004,23 @@ mod tests {
                     "portMappings": [{ "containerPort": 80, "hostPort": 8080 }]
                 }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_common_mistakes(&td);
         assert!(diags.is_empty());
     }
 
     #[test]
     fn common_mistakes_has_essential_true_no_warning() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "a", "image": "alpine:latest", "essential": true },
                 { "name": "b", "image": "alpine:latest", "essential": false }
             ]
-        }"#);
+        }"#,
+        );
         let diags = check_common_mistakes(&td);
         assert!(!diags.iter().any(|d| d.message.contains("essential=false")));
     }
@@ -983,17 +1029,21 @@ mod tests {
 
     #[test]
     fn validate_overrides_valid_names() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "app", "image": "alpine:latest" }
             ]
-        }"#);
-        let overrides = OverrideConfig::from_json(r#"{
+        }"#,
+        );
+        let overrides = OverrideConfig::from_json(
+            r#"{
             "containerOverrides": {
                 "app": { "image": "alpine:3.18" }
             }
-        }"#)
+        }"#,
+        )
         .unwrap();
         let diags = validate_overrides(&td, &overrides);
         assert!(diags.is_empty());
@@ -1001,17 +1051,21 @@ mod tests {
 
     #[test]
     fn validate_overrides_unknown_container() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "app", "image": "alpine:latest" }
             ]
-        }"#);
-        let overrides = OverrideConfig::from_json(r#"{
+        }"#,
+        );
+        let overrides = OverrideConfig::from_json(
+            r#"{
             "containerOverrides": {
                 "nonexistent": { "image": "alpine:3.18" }
             }
-        }"#)
+        }"#,
+        )
         .unwrap();
         let diags = validate_overrides(&td, &overrides);
         assert_eq!(diags.len(), 1);
@@ -1021,15 +1075,19 @@ mod tests {
 
     #[test]
     fn validate_overrides_empty() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 { "name": "app", "image": "alpine:latest" }
             ]
-        }"#);
-        let overrides = OverrideConfig::from_json(r#"{
+        }"#,
+        );
+        let overrides = OverrideConfig::from_json(
+            r#"{
             "containerOverrides": {}
-        }"#)
+        }"#,
+        )
         .unwrap();
         let diags = validate_overrides(&td, &overrides);
         assert!(diags.is_empty());
@@ -1039,7 +1097,8 @@ mod tests {
 
     #[test]
     fn validate_extended_collects_all_issues() {
-        let td = make_task_def(r#"{
+        let td = make_task_def(
+            r#"{
             "family": "test",
             "containerDefinitions": [
                 {
@@ -1060,7 +1119,8 @@ mod tests {
                     "essential": false
                 }
             ]
-        }"#);
+        }"#,
+        );
         let report = validate_extended(&td);
         // Image error + port conflict error + secret ARN warning + essential warning + no ports warning (only for "all")
         assert!(report.has_errors());

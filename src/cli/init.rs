@@ -17,7 +17,6 @@ pub fn execute(args: &InitArgs) -> Result<()> {
 
     let container_name = "app";
     let mut created = Vec::new();
-    let mut skipped = Vec::new();
 
     let files: Vec<(&str, String)> = vec![
         (
@@ -35,7 +34,6 @@ pub fn execute(args: &InitArgs) -> Result<()> {
         let path = args.dir.join(filename);
         if path.exists() {
             println!("skip: {filename} already exists");
-            skipped.push(*filename);
         } else {
             std::fs::write(&path, content)?;
             println!("created: {filename}");
@@ -47,7 +45,10 @@ pub fn execute(args: &InitArgs) -> Result<()> {
         println!("\nAll files already exist. Nothing to do.");
     } else {
         println!("\nNext steps:");
-        println!("  egret validate -f {}/task-definition.json", args.dir.display());
+        println!(
+            "  egret validate -f {}/task-definition.json",
+            args.dir.display()
+        );
         println!(
             "  egret run -f {}/task-definition.json --override {}/egret-override.json",
             args.dir.display(),
@@ -133,7 +134,10 @@ mod tests {
     fn generated_task_def_is_parseable() {
         let json = generate_task_definition("test-app", "nginx:latest");
         let result = TaskDefinition::from_json(&json);
-        assert!(result.is_ok(), "generated JSON should be parseable: {result:?}");
+        assert!(
+            result.is_ok(),
+            "generated JSON should be parseable: {result:?}"
+        );
     }
 
     #[test]

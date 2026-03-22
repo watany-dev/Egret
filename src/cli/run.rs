@@ -360,9 +360,15 @@ fn build_container_config(
 
 /// Format resolved configuration for dry-run output.
 fn display_dry_run(task_def: &TaskDefinition, secret_names: &HashSet<String>) -> String {
+    use std::fmt::Write;
+
     let mut output = String::new();
-    output.push_str(&format!("Dry-run: {} ({})\n", task_def.family, "no containers will be started"));
-    output.push_str(&format!("Network: egret-{}\n", task_def.family));
+    let _ = writeln!(
+        output,
+        "Dry-run: {} (no containers will be started)",
+        task_def.family
+    );
+    let _ = writeln!(output, "Network: egret-{}", task_def.family);
 
     for (i, container) in task_def.container_definitions.iter().enumerate() {
         if i > 0 {
@@ -384,17 +390,19 @@ fn format_container_dry_run(
     container: &ContainerDefinition,
     secret_names: &HashSet<String>,
 ) -> String {
+    use std::fmt::Write;
+
     let mut output = String::new();
-    output.push_str(&format!("\nContainer: {}-{}\n", family, container.name));
-    output.push_str(&format!("  Image: {}\n", container.image));
+    let _ = writeln!(output, "\nContainer: {}-{}", family, container.name);
+    let _ = writeln!(output, "  Image: {}", container.image);
 
     if !container.environment.is_empty() {
         output.push_str("  Environment:\n");
         for env in &container.environment {
             if secret_names.contains(&env.name) {
-                output.push_str(&format!("    {}=******\n", env.name));
+                let _ = writeln!(output, "    {}=******", env.name);
             } else {
-                output.push_str(&format!("    {}={}\n", env.name, env.value));
+                let _ = writeln!(output, "    {}={}", env.name, env.value);
             }
         }
     }
@@ -403,10 +411,11 @@ fn format_container_dry_run(
         output.push_str("  Ports:\n");
         for pm in &container.port_mappings {
             let host_port = pm.host_port.unwrap_or(pm.container_port);
-            output.push_str(&format!(
-                "    {}:{}/{}\n",
+            let _ = writeln!(
+                output,
+                "    {}:{}/{}",
                 host_port, pm.container_port, pm.protocol
-            ));
+            );
         }
     }
 
@@ -416,11 +425,11 @@ fn format_container_dry_run(
             .iter()
             .map(|d| format!("{} ({:?})", d.container_name, d.condition))
             .collect();
-        output.push_str(&format!("  Depends on: {}\n", deps.join(", ")));
+        let _ = writeln!(output, "  Depends on: {}", deps.join(", "));
     }
 
     if let Some(hc) = &container.health_check {
-        output.push_str(&format!("  Health check: {}\n", hc.command.join(" ")));
+        let _ = writeln!(output, "  Health check: {}", hc.command.join(" "));
     }
 
     output
@@ -1147,8 +1156,7 @@ mod tests {
             health_check: None,
             mount_points: vec![],
         };
-        let secret_names: HashSet<String> =
-            ["DB_PASSWORD".to_string()].into_iter().collect();
+        let secret_names: HashSet<String> = std::iter::once("DB_PASSWORD".to_string()).collect();
         let output = format_container_dry_run("test", &def, &secret_names);
         assert!(output.contains("PUBLIC_VAR=visible"));
         assert!(output.contains("DB_PASSWORD=******"));

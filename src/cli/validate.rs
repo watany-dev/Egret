@@ -4,10 +4,8 @@ use anyhow::Result;
 
 use crate::overrides::OverrideConfig;
 use crate::secrets::SecretsResolver;
-use crate::taskdef::diagnostics::{
-    self, Severity, ValidationDiagnostic, ValidationReport,
-};
 use crate::taskdef::TaskDefinition;
+use crate::taskdef::diagnostics::{self, Severity, ValidationDiagnostic, ValidationReport};
 
 use super::ValidateArgs;
 
@@ -99,19 +97,15 @@ fn validate_secrets_coverage(
 
     for (ci, container) in task_def.container_definitions.iter().enumerate() {
         for (si, secret) in container.secrets.iter().enumerate() {
-            if resolver.resolve(&[secret.clone()]).is_err() {
+            if resolver.resolve(std::slice::from_ref(secret)).is_err() {
                 diagnostics.push(ValidationDiagnostic {
                     severity: Severity::Error,
-                    field_path: format!(
-                        "containerDefinitions[{ci}].secrets[{si}].valueFrom"
-                    ),
+                    field_path: format!("containerDefinitions[{ci}].secrets[{si}].valueFrom"),
                     message: format!(
                         "secret ARN '{}' not found in secrets mapping",
                         secret.value_from
                     ),
-                    suggestion: Some(
-                        "add this ARN to your secrets.local.json file".to_string(),
-                    ),
+                    suggestion: Some("add this ARN to your secrets.local.json file".to_string()),
                 });
             }
         }
