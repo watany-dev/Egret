@@ -1,5 +1,7 @@
 //! CLI command definitions and argument parsing.
 
+pub mod logs;
+pub mod ps;
 pub mod run;
 pub mod stop;
 pub mod version;
@@ -26,6 +28,10 @@ pub enum Command {
     Run(RunArgs),
     /// Stop a running local task
     Stop(StopArgs),
+    /// List running tasks
+    Ps(PsArgs),
+    /// Show logs for a container
+    Logs(LogsArgs),
     /// Show version information
     Version,
 }
@@ -57,6 +63,22 @@ pub struct StopArgs {
     /// Stop all running tasks
     #[arg(long)]
     pub all: bool,
+}
+
+#[derive(Parser)]
+pub struct PsArgs {
+    /// Filter by task family name
+    pub task: Option<String>,
+}
+
+#[derive(Parser)]
+pub struct LogsArgs {
+    /// Container name (e.g., "app" or "my-task-app")
+    pub container: String,
+
+    /// Follow log output (like tail -f)
+    #[arg(short, long)]
+    pub follow: bool,
 }
 
 #[cfg(test)]
@@ -157,6 +179,64 @@ mod tests {
                 assert!(args.task.is_none());
             }
             _ => panic!("expected Stop command"),
+        }
+    }
+
+    #[test]
+    fn parse_ps_no_args() {
+        let cli = Cli::try_parse_from(["egret", "ps"]).expect("should parse");
+        match cli.command {
+            Command::Ps(args) => {
+                assert!(args.task.is_none());
+            }
+            _ => panic!("expected Ps command"),
+        }
+    }
+
+    #[test]
+    fn parse_ps_with_task_filter() {
+        let cli = Cli::try_parse_from(["egret", "ps", "my-app"]).expect("should parse");
+        match cli.command {
+            Command::Ps(args) => {
+                assert_eq!(args.task.as_deref(), Some("my-app"));
+            }
+            _ => panic!("expected Ps command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_command() {
+        let cli = Cli::try_parse_from(["egret", "logs", "app"]).expect("should parse");
+        match cli.command {
+            Command::Logs(args) => {
+                assert_eq!(args.container, "app");
+                assert!(!args.follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_follow() {
+        let cli = Cli::try_parse_from(["egret", "logs", "app", "--follow"]).expect("should parse");
+        match cli.command {
+            Command::Logs(args) => {
+                assert_eq!(args.container, "app");
+                assert!(args.follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_logs_with_short_follow() {
+        let cli = Cli::try_parse_from(["egret", "logs", "app", "-f"]).expect("should parse");
+        match cli.command {
+            Command::Logs(args) => {
+                assert_eq!(args.container, "app");
+                assert!(args.follow);
+            }
+            _ => panic!("expected Logs command"),
         }
     }
 }

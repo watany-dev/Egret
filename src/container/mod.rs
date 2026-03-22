@@ -81,6 +81,8 @@ pub struct ContainerConfig {
     pub extra_hosts: Vec<String>,
     /// Docker HEALTHCHECK configuration.
     pub health_check: Option<HealthCheckConfig>,
+    /// Bind mount volumes (format: `host_path:container_path` or `host_path:container_path:ro`).
+    pub binds: Vec<String>,
 }
 
 /// Docker HEALTHCHECK configuration (nanosecond units).
@@ -108,9 +110,9 @@ pub struct PortMappingConfig {
 pub struct ContainerInfo {
     pub id: String,
     pub name: String,
-    #[allow(dead_code)]
+    /// Container image name.
+    pub image: String,
     pub family: String,
-    #[allow(dead_code)]
     pub state: String,
 }
 
@@ -249,13 +251,20 @@ impl ContainerClient {
         Ok(Self { docker })
     }
 
-    /// Stream container logs (follow mode).
-    pub fn stream_logs(&self, id: &str) -> impl Stream<Item = Result<String, ContainerError>> + '_ {
+    /// Stream container logs.
+    ///
+    /// When `follow` is `true` the stream stays open (like `docker logs -f`).
+    /// When `false` it returns existing logs and ends.
+    pub fn stream_logs(
+        &self,
+        id: &str,
+        follow: bool,
+    ) -> impl Stream<Item = Result<String, ContainerError>> + '_ {
         self.docker
             .logs(
                 id,
                 Some(LogsOptions::<String> {
-                    follow: true,
+                    follow,
                     stdout: true,
                     stderr: true,
                     ..Default::default()
@@ -406,6 +415,7 @@ impl ContainerRuntime for ContainerClient {
                         .and_then(|n| n.first())
                         .map(|n| n.trim_start_matches('/').to_string())
                         .unwrap_or_default(),
+                    image: c.image.unwrap_or_default(),
                     family: labels.get("egret.task").cloned().unwrap_or_default(),
                     state: c.state.unwrap_or_default(),
                 })
@@ -483,9 +493,16 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         Some(config.extra_hosts.clone())
     };
 
+    let binds = if config.binds.is_empty() {
+        None
+    } else {
+        Some(config.binds.clone())
+    };
+
     let host_config = HostConfig {
         port_bindings: Some(port_bindings),
         extra_hosts,
+        binds,
         ..Default::default()
     };
 
@@ -658,6 +675,7 @@ mod tests {
             labels: HashMap::from([("egret.managed".into(), "true".into())]),
             extra_hosts: vec![],
             health_check: None,
+            binds: vec![],
         }
     }
 
@@ -717,6 +735,7 @@ mod tests {
             labels: HashMap::new(),
             extra_hosts: vec![],
             health_check: None,
+            binds: vec![],
         };
         let result = build_bollard_config(&config);
 
@@ -838,5 +857,30 @@ mod tests {
         let config = sample_config();
         let result = build_bollard_config(&config);
         assert!(result.healthcheck.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_with_binds() {
+        let mut config = sample_config();
+        config.binds = vec![
+            "/host/data:/container/data".to_string(),
+            "/host/cache:/container/cache:ro".to_string(),
+        ];
+        let result = build_bollard_config(&config);
+
+        let host_config = result.host_config.as_ref().expect("host_config");
+        let binds = host_config.binds.as_ref().expect("binds");
+        assert_eq!(binds.len(), 2);
+        assert_eq!(binds[0], "/host/data:/container/data");
+        assert_eq!(binds[1], "/host/cache:/container/cache:ro");
+    }
+
+    #[test]
+    fn build_bollard_config_empty_binds() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+
+        let host_config = result.host_config.as_ref().expect("host_config");
+        assert!(host_config.binds.is_none());
     }
 }

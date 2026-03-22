@@ -67,6 +67,7 @@ mod tests {
         ContainerInfo {
             id: id.to_string(),
             name: name.to_string(),
+            image: "alpine:latest".to_string(),
             family: "test".to_string(),
             state: "running".to_string(),
         }

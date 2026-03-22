@@ -42,6 +42,10 @@ pub struct TaskDefinition {
     #[allow(dead_code)]
     pub execution_role_arn: Option<String>,
 
+    /// Task-level volume definitions.
+    #[serde(default)]
+    pub volumes: Vec<Volume>,
+
     /// Container definitions.
     pub container_definitions: Vec<ContainerDefinition>,
 }
@@ -99,6 +103,10 @@ pub struct ContainerDefinition {
     /// Health check configuration.
     #[serde(default)]
     pub health_check: Option<HealthCheck>,
+
+    /// Mount points referencing task-level volumes.
+    #[serde(default)]
+    pub mount_points: Vec<MountPoint>,
 }
 
 const fn default_essential() -> bool {
@@ -187,6 +195,38 @@ pub struct HealthCheck {
     /// Grace period before health checks start in seconds (default: 0).
     #[serde(default)]
     pub start_period: u32,
+}
+
+/// Task-level volume definition (ECS-compatible).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Volume {
+    /// Volume name (referenced by mountPoints).
+    pub name: String,
+    /// Host path for bind mount. None for Docker-managed volumes (skipped).
+    #[serde(default)]
+    pub host: Option<VolumeHost>,
+}
+
+/// Host path for bind mount volumes.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeHost {
+    /// Absolute path on the host machine.
+    pub source_path: String,
+}
+
+/// Container mount point referencing a task-level volume.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MountPoint {
+    /// Name of the volume to mount (must match a Volume.name).
+    pub source_volume: String,
+    /// Absolute path inside the container.
+    pub container_path: String,
+    /// Mount as read-only (default: false).
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 const fn default_health_interval() -> u32 {
@@ -291,6 +331,42 @@ impl TaskDefinition {
         Ok(())
     }
 
+    /// Validate `mountPoints` references against task-level `volumes`.
+    fn validate_mount_points(&self) -> Result<(), TaskDefError> {
+        let volume_names: HashSet<&str> = self.volumes.iter().map(|v| v.name.as_str()).collect();
+
+        for container in &self.container_definitions {
+            for mp in &container.mount_points {
+                if !volume_names.contains(mp.source_volume.as_str()) {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' references unknown volume '{}'",
+                        container.name, mp.source_volume
+                    )));
+                }
+                if mp.container_path.is_empty() {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' has mountPoint with empty containerPath for volume '{}'",
+                        container.name, mp.source_volume
+                    )));
+                }
+            }
+        }
+
+        // Validate host.source_path is not empty when host is present
+        for volume in &self.volumes {
+            if let Some(host) = &volume.host
+                && host.source_path.is_empty()
+            {
+                return Err(TaskDefError::Validation(format!(
+                    "volume '{}' has empty host.sourcePath",
+                    volume.name
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate the task definition (fail-fast).
     fn validate(&self) -> Result<(), TaskDefError> {
         if self.family.is_empty() {
@@ -319,7 +395,8 @@ impl TaskDefinition {
                 Self::validate_health_check(hc, &container.name)?;
             }
         }
-        self.validate_depends_on()
+        self.validate_depends_on()?;
+        self.validate_mount_points()
     }
 }
 
@@ -912,5 +989,134 @@ mod tests {
         }"#;
         let task_def = TaskDefinition::from_json(json).expect("should parse valid dependsOn");
         assert_eq!(task_def.container_definitions[1].depends_on.len(), 1);
+    }
+
+    #[test]
+    fn parse_volumes_and_mount_points() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "app-data", "host": { "sourcePath": "/home/user/data" } },
+                { "name": "tmp-cache" }
+            ],
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "app-data", "containerPath": "/data", "readOnly": false },
+                        { "sourceVolume": "tmp-cache", "containerPath": "/tmp/cache", "readOnly": true }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        assert_eq!(task_def.volumes.len(), 2);
+        assert_eq!(task_def.volumes[0].name, "app-data");
+        assert_eq!(
+            task_def.volumes[0].host.as_ref().unwrap().source_path,
+            "/home/user/data"
+        );
+        assert!(task_def.volumes[1].host.is_none());
+
+        let mps = &task_def.container_definitions[0].mount_points;
+        assert_eq!(mps.len(), 2);
+        assert_eq!(mps[0].source_volume, "app-data");
+        assert_eq!(mps[0].container_path, "/data");
+        assert!(!mps[0].read_only);
+        assert_eq!(mps[1].source_volume, "tmp-cache");
+        assert_eq!(mps[1].container_path, "/tmp/cache");
+        assert!(mps[1].read_only);
+    }
+
+    #[test]
+    fn parse_volumes_empty_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.volumes.is_empty());
+        assert!(task_def.container_definitions[0].mount_points.is_empty());
+    }
+
+    #[test]
+    fn parse_mount_points_read_only_default_false() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "/data" } }
+            ],
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "data", "containerPath": "/data" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        assert!(!task_def.container_definitions[0].mount_points[0].read_only);
+    }
+
+    #[test]
+    fn validate_mount_points_unknown_volume() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "nonexistent", "containerPath": "/data" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("unknown volume 'nonexistent'")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_mount_points_empty_container_path() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "/data" } }
+            ],
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "mountPoints": [
+                        { "sourceVolume": "data", "containerPath": "" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("empty containerPath")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_volume_empty_source_path() {
+        let json = r#"{
+            "family": "test",
+            "volumes": [
+                { "name": "data", "host": { "sourcePath": "" } }
+            ],
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("empty host.sourcePath")),
+            "unexpected error: {err}"
+        );
     }
 }
