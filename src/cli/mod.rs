@@ -1,5 +1,6 @@
 //! CLI command definitions and argument parsing.
 
+pub mod history;
 pub mod init;
 pub mod inspect;
 pub mod logs;
@@ -44,8 +45,17 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Show live resource usage statistics
     Stats(StatsArgs),
+    /// Show execution history
+    History(HistoryArgs),
     /// Show version information
     Version,
+}
+
+#[derive(Parser)]
+pub struct HistoryArgs {
+    /// Clear all history
+    #[arg(long)]
+    pub clear: bool,
 }
 
 #[derive(Parser)]
@@ -451,6 +461,29 @@ mod tests {
                 assert_eq!(args.interval, 5);
             }
             _ => panic!("expected Stats command"),
+        }
+    }
+
+    #[test]
+    fn parse_history_command() {
+        let cli = Cli::try_parse_from(["egret", "history"]).expect("should parse");
+        match cli.command {
+            Command::History(args) => {
+                assert!(!args.clear);
+            }
+            _ => panic!("expected History command"),
+        }
+    }
+
+    #[test]
+    fn parse_history_with_clear() {
+        let cli =
+            Cli::try_parse_from(["egret", "history", "--clear"]).expect("should parse");
+        match cli.command {
+            Command::History(args) => {
+                assert!(args.clear);
+            }
+            _ => panic!("expected History command"),
         }
     }
 
