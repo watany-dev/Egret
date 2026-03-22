@@ -219,7 +219,7 @@ async fn create_and_start_container(
     let family = spec
         .config
         .labels
-        .get("egret.task")
+        .get("lecs.task")
         .cloned()
         .unwrap_or_default();
     let id = client.create_container(&spec.config).await.map_err(|e| {
@@ -313,7 +313,7 @@ pub async fn orchestrate_startup(
                         let dep_family = dep_spec
                             .config
                             .labels
-                            .get("egret.task")
+                            .get("lecs.task")
                             .map(String::as_str)
                             .unwrap_or_default();
                         let dep_health_check = dep_spec.health_check.as_ref();
@@ -927,7 +927,7 @@ mod tests {
                 entry_point: vec![],
                 env: vec![],
                 port_mappings: vec![],
-                network: "egret-test".to_string(),
+                network: "lecs-test".to_string(),
                 network_aliases: vec![name.to_string()],
                 labels: HashMap::new(),
                 extra_hosts: vec![],

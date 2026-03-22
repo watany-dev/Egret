@@ -13,7 +13,7 @@ pub async fn execute(args: &PsArgs, host: Option<&str>) -> Result<()> {
     execute_with_client(args, &client).await
 }
 
-/// List Egret-managed containers (testable with mock).
+/// List Lecs-managed containers (testable with mock).
 #[allow(clippy::print_stdout)]
 pub async fn execute_with_client(
     args: &PsArgs,
@@ -23,7 +23,7 @@ pub async fn execute_with_client(
     let containers = client.list_containers(task_filter).await?;
 
     if containers.is_empty() {
-        println!("No egret containers found.");
+        println!("No lecs containers found.");
         return Ok(());
     }
 

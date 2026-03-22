@@ -1,4 +1,4 @@
-//! Execution history persistence for Egret tasks.
+//! Execution history persistence for Lecs tasks.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -65,10 +65,10 @@ pub fn clear(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Return the default history file path: `$HOME/.egret/history.json`.
+/// Return the default history file path: `$HOME/.lecs/history.json`.
 pub fn default_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".egret").join("history.json")
+    PathBuf::from(home).join(".lecs").join("history.json")
 }
 
 #[cfg(test)]
@@ -163,10 +163,10 @@ mod tests {
     }
 
     #[test]
-    fn default_path_contains_egret() {
+    fn default_path_contains_lecs() {
         let path = default_path();
         let path_str = path.to_string_lossy();
-        assert!(path_str.contains(".egret"));
+        assert!(path_str.contains(".lecs"));
         assert!(path_str.contains("history.json"));
     }
 }

@@ -12,7 +12,7 @@
 
 `/credentials` エンドポイントが認証なしでAWSクレデンシャル（`AccessKeyId`, `SecretAccessKey`, `Token`）を返す。メタデータサーバーは `127.0.0.1` にバインドされているが、ローカルマシン上の任意のプロセスがポート番号を推測・取得しクレデンシャルを窃取できる。
 
-ECS Task Metadata Endpoint V4 は `Authorization` ヘッダーによるトークン検証を要求するが、Egretにはこの保護がない。
+ECS Task Metadata Endpoint V4 は `Authorization` ヘッダーによるトークン検証を要求するが、Lecsにはこの保護がない。
 
 ### 1.2 修正方針
 

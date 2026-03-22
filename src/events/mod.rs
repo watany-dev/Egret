@@ -1,4 +1,4 @@
-//! Structured lifecycle event logging for Egret tasks.
+//! Structured lifecycle event logging for Lecs tasks.
 
 use std::io::Write;
 

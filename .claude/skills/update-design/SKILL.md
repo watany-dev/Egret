@@ -1,5 +1,5 @@
 ---
-description: Egretの設計書（docs/design/*.md）を評価・改善するスキル
+description: Lecsの設計書（docs/design/*.md）を評価・改善するスキル
 ---
 
 # update-design

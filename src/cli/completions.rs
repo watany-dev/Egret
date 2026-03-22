@@ -1,4 +1,4 @@
-//! `egret completions` command implementation.
+//! `lecs completions` command implementation.
 
 use std::io::Write;
 
@@ -17,7 +17,7 @@ pub fn execute(args: &CompletionsArgs) {
 /// Generate shell completion script to the given writer.
 pub fn generate_to_writer(shell: Shell, writer: &mut impl Write) {
     let mut cmd = Cli::command();
-    clap_complete::generate(shell, &mut cmd, "egret", writer);
+    clap_complete::generate(shell, &mut cmd, "lecs", writer);
 }
 
 #[cfg(test)]
@@ -32,8 +32,8 @@ mod tests {
         let output = String::from_utf8(buf).expect("valid utf-8");
         assert!(!output.is_empty(), "bash completions should not be empty");
         assert!(
-            output.contains("egret"),
-            "bash completions should contain 'egret'"
+            output.contains("lecs"),
+            "bash completions should contain 'lecs'"
         );
     }
 
@@ -44,8 +44,8 @@ mod tests {
         let output = String::from_utf8(buf).expect("valid utf-8");
         assert!(!output.is_empty(), "zsh completions should not be empty");
         assert!(
-            output.contains("egret"),
-            "zsh completions should contain 'egret'"
+            output.contains("lecs"),
+            "zsh completions should contain 'lecs'"
         );
     }
 
@@ -56,8 +56,8 @@ mod tests {
         let output = String::from_utf8(buf).expect("valid utf-8");
         assert!(!output.is_empty(), "fish completions should not be empty");
         assert!(
-            output.contains("egret"),
-            "fish completions should contain 'egret'"
+            output.contains("lecs"),
+            "fish completions should contain 'lecs'"
         );
     }
 }

@@ -365,15 +365,15 @@ fn build_container_config(
     auth_token: Option<&str>,
 ) -> ContainerConfig {
     let mut labels = HashMap::from([
-        ("egret.managed".into(), "true".into()),
-        ("egret.task".into(), family.into()),
-        ("egret.container".into(), def.name.clone()),
+        ("lecs.managed".into(), "true".into()),
+        ("lecs.task".into(), family.into()),
+        ("lecs.container".into(), def.name.clone()),
     ]);
 
     // Store secret names for inspect masking
     if !def.secrets.is_empty() {
         let secret_names: Vec<String> = def.secrets.iter().map(|s| s.name.clone()).collect();
-        labels.insert("egret.secrets".into(), secret_names.join(","));
+        labels.insert("lecs.secrets".into(), secret_names.join(","));
     }
 
     // Store dependency info for ps display
@@ -383,7 +383,7 @@ fn build_container_config(
             .iter()
             .map(|d| format!("{}:{:?}", d.container_name, d.condition))
             .collect();
-        labels.insert("egret.depends_on".into(), deps.join(","));
+        labels.insert("lecs.depends_on".into(), deps.join(","));
     }
 
     let mut env: Vec<String> = def
@@ -454,7 +454,7 @@ fn display_dry_run(task_def: &TaskDefinition, secret_names: &HashSet<String>) ->
         "Dry-run: {} (no containers will be started)",
         task_def.family
     );
-    let _ = writeln!(output, "Network: egret-{}", task_def.family);
+    let _ = writeln!(output, "Network: lecs-{}", task_def.family);
 
     for (i, container) in task_def.container_definitions.iter().enumerate() {
         if i > 0 {
@@ -608,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn run_task_single_container() {
         let mock = MockContainerClient {
-            create_network_results: Mutex::new(VecDeque::from([Ok("egret-web".to_string())])),
+            create_network_results: Mutex::new(VecDeque::from([Ok("lecs-web".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([Ok("container-1".to_string())])),
             start_container_results: Mutex::new(VecDeque::from([Ok(())])),
             ..MockContainerClient::new()
@@ -619,7 +619,7 @@ mod tests {
             .await
             .expect("should succeed");
 
-        assert_eq!(network, "egret-web");
+        assert_eq!(network, "lecs-web");
         assert_eq!(containers.len(), 1);
         assert_eq!(containers[0].0, "container-1");
         assert_eq!(containers[0].1, "app");
@@ -628,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn run_task_multi_container() {
         let mock = MockContainerClient {
-            create_network_results: Mutex::new(VecDeque::from([Ok("egret-multi".to_string())])),
+            create_network_results: Mutex::new(VecDeque::from([Ok("lecs-multi".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([
                 Ok("c1".to_string()),
                 Ok("c2".to_string()),
@@ -664,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn run_task_container_create_failure() {
         let mock = MockContainerClient {
-            create_network_results: Mutex::new(VecDeque::from([Ok("egret-multi".to_string())])),
+            create_network_results: Mutex::new(VecDeque::from([Ok("lecs-multi".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([
                 Ok("c1".to_string()),
                 Err(crate::container::ContainerError::RuntimeNotRunning),
@@ -688,7 +688,7 @@ mod tests {
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
-        cleanup(&mock, &containers, "egret-test", &NullEventSink, "test").await;
+        cleanup(&mock, &containers, "lecs-test", &NullEventSink, "test").await;
         // No panic = success (best-effort cleanup)
     }
 
@@ -704,7 +704,7 @@ mod tests {
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
-        cleanup(&mock, &containers, "egret-test", &NullEventSink, "test").await;
+        cleanup(&mock, &containers, "lecs-test", &NullEventSink, "test").await;
     }
 
     #[tokio::test]
@@ -719,7 +719,7 @@ mod tests {
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
-        cleanup(&mock, &containers, "egret-test", &NullEventSink, "test").await;
+        cleanup(&mock, &containers, "lecs-test", &NullEventSink, "test").await;
     }
 
     #[tokio::test]
@@ -735,7 +735,7 @@ mod tests {
 
         let containers = vec![("c1".to_string(), "app".to_string())];
         let sink = CollectingEventSink::new();
-        cleanup(&mock, &containers, "egret-test", &sink, "my-app").await;
+        cleanup(&mock, &containers, "lecs-test", &sink, "my-app").await;
 
         let events = sink.events();
         assert_eq!(events.len(), 1);
@@ -773,7 +773,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("my-app", &def, "egret-my-app", None, &[], None);
+        let config = build_container_config("my-app", &def, "lecs-my-app", None, &[], None);
 
         assert_eq!(config.name, "my-app-app");
         assert_eq!(config.image, "nginx:latest");
@@ -784,11 +784,11 @@ mod tests {
         assert_eq!(config.port_mappings[0].host_port, 8080);
         assert_eq!(config.port_mappings[0].container_port, 80);
         assert_eq!(config.port_mappings[0].protocol, "tcp");
-        assert_eq!(config.network, "egret-my-app");
+        assert_eq!(config.network, "lecs-my-app");
         assert_eq!(config.network_aliases, vec!["app"]);
-        assert_eq!(config.labels.get("egret.managed").unwrap(), "true");
-        assert_eq!(config.labels.get("egret.task").unwrap(), "my-app");
-        assert_eq!(config.labels.get("egret.container").unwrap(), "app");
+        assert_eq!(config.labels.get("lecs.managed").unwrap(), "true");
+        assert_eq!(config.labels.get("lecs.task").unwrap(), "my-app");
+        assert_eq!(config.labels.get("lecs.container").unwrap(), "app");
     }
 
     #[test]
@@ -814,7 +814,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[], None);
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
 
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
@@ -840,7 +840,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[], None);
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
         assert_eq!(
             config.extra_hosts,
             vec!["host.docker.internal:host-gateway"]
@@ -866,7 +866,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[], None);
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
 
         assert!(config.command.is_empty());
         assert!(config.entry_point.is_empty());
@@ -893,7 +893,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", Some(12345), &[], None);
+        let config = build_container_config("test", &def, "lecs-test", Some(12345), &[], None);
 
         assert!(config.env.contains(
             &"ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:12345/v4/app".to_string()
@@ -928,7 +928,7 @@ mod tests {
         let config = build_container_config(
             "test",
             &def,
-            "egret-test",
+            "lecs-test",
             Some(12345),
             &[],
             Some("my-secret-token"),
@@ -960,7 +960,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", Some(12345), &[], None);
+        let config = build_container_config("test", &def, "lecs-test", Some(12345), &[], None);
 
         assert!(
             !config
@@ -989,7 +989,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[], None);
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
 
         assert!(
             !config
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn parse_run_with_no_metadata_flag() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--no-metadata"])
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--no-metadata"])
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
@@ -1019,7 +1019,7 @@ mod tests {
 
     #[test]
     fn parse_run_without_no_metadata_flag() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
                 assert!(!args.no_metadata);
@@ -1055,7 +1055,7 @@ mod tests {
             mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &[], None);
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
         let hc = config
             .health_check
             .as_ref()
@@ -1070,7 +1070,7 @@ mod tests {
     #[tokio::test]
     async fn run_task_with_dependencies() {
         let mock = MockContainerClient {
-            create_network_results: Mutex::new(VecDeque::from([Ok("egret-test".to_string())])),
+            create_network_results: Mutex::new(VecDeque::from([Ok("lecs-test".to_string())])),
             create_container_results: Mutex::new(VecDeque::from([
                 Ok("db-id".to_string()),
                 Ok("app-id".to_string()),
@@ -1127,7 +1127,7 @@ mod tests {
             .await
             .expect("should succeed");
 
-        assert_eq!(network, "egret-test");
+        assert_eq!(network, "lecs-test");
         assert_eq!(containers.len(), 2);
         // DAG ensures db starts before app
         assert_eq!(containers[0].1, "db");
@@ -1230,7 +1230,7 @@ mod tests {
             }],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None, &volumes, None);
+        let config = build_container_config("test", &def, "lecs-test", None, &volumes, None);
         assert_eq!(config.binds, vec!["/host/data:/app/data"]);
     }
 
@@ -1445,14 +1445,14 @@ mod tests {
             ],
         };
         let output = display_dry_run(&td, &HashSet::new());
-        assert!(output.contains("Network: egret-my-app"));
+        assert!(output.contains("Network: lecs-my-app"));
         assert!(output.contains("Container: my-app-web"));
         assert!(output.contains("Container: my-app-api"));
     }
 
     #[test]
     fn parse_run_with_dry_run_flag() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--dry-run"])
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--dry-run"])
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {

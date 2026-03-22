@@ -2,7 +2,7 @@
 
 ## Context
 
-Phase 0-4 で Egret はタスク定義パース、コンテナ実行、オーバーライド、シークレット、メタデータ/クレデンシャル、dependsOn/HealthCheck をすべて実装した。Phase 5 では開発体験を改善する4機能を実装する。
+Phase 0-4 で Lecs はタスク定義パース、コンテナ実行、オーバーライド、シークレット、メタデータ/クレデンシャル、dependsOn/HealthCheck をすべて実装した。Phase 5 では開発体験を改善する4機能を実装する。
 
 **対象要件**: FR-9.1〜FR-9.4
 
@@ -12,9 +12,9 @@ Phase 0-4 で Egret はタスク定義パース、コンテナ実行、オーバ
 
 ```
                       ┌───────────────────────────────────────────────────┐
-                      │   Egret Host Process                              │
+                      │   Lecs Host Process                              │
                       │                                                   │
-                      │   egret run -f task-def.json                      │
+                      │   lecs run -f task-def.json                      │
                       │     │                                             │
                       │     ▼                                             │
                       │   TaskDefinition::from_file()                     │
@@ -36,7 +36,7 @@ Phase 0-4 で Egret はタスク定義パース、コンテナ実行、オーバ
                       │   │  \x1b[33m[db]\x1b[0m  log...    │            │
                       │   └─────────────────────────────────┘            │
                       │                                                   │
-                      │   egret ps         egret logs <name>              │
+                      │   lecs ps         lecs logs <name>              │
                       │     │                │                            │
                       │     ▼                ▼                            │
                       │   list_containers  find_container + stream_logs   │
@@ -46,7 +46,7 @@ Phase 0-4 で Egret はタスク定義パース、コンテナ実行、オーバ
                       └───────────────────────────────────────────────────┘
                                         ▲
                ┌────────────────────────┼─────────────────────────┐
-               │   egret-<family> network                          │
+               │   lecs-<family> network                          │
                │                        │                          │
                │   ┌─────┐  ┌─────┐  ┌─────┐                     │
                │   │ app │  │ db  │  │redis│                     │
@@ -65,8 +65,8 @@ Phase 0-4 で Egret はタスク定義パース、コンテナ実行、オーバ
 | `src/taskdef/mod.rs` | `Volume`, `VolumeHost`, `MountPoint` 型定義 + `validate_mount_points()` |
 | `src/container/mod.rs` | `ContainerConfig.binds` 追加、`ContainerInfo.image` 追加、`build_bollard_config()` 更新 |
 | `src/cli/run.rs` | `resolve_binds()`, `container_color()`, `format_log_line()` |
-| `src/cli/ps.rs` | **新規** — `egret ps` コマンド実装 |
-| `src/cli/logs.rs` | **新規** — `egret logs` コマンド実装 |
+| `src/cli/ps.rs` | **新規** — `lecs ps` コマンド実装 |
+| `src/cli/logs.rs` | **新規** — `lecs logs` コマンド実装 |
 | `src/cli/mod.rs` | `PsArgs`, `LogsArgs` 型定義、`Command` enum 拡張 |
 | `src/main.rs` | `Ps`, `Logs` ディスパッチ追加 |
 
@@ -192,7 +192,7 @@ fn format_log_line(name: &str, line: &str, color: &str) -> String
 #[cfg(not(tarpaulin_include))]
 pub async fn execute(args: &PsArgs, host: Option<&str>) -> Result<()>
 
-/// List Egret-managed containers (testable with mock).
+/// List Lecs-managed containers (testable with mock).
 #[allow(clippy::print_stdout)]
 pub async fn execute_with_client(
     args: &PsArgs,
@@ -251,15 +251,15 @@ TaskDefinition::from_file()
     ▼ Docker/Podman API → コンテナ作成
 ```
 
-### `egret ps` データフロー
+### `lecs ps` データフロー
 
 ```
-egret ps [family]
+lecs ps [family]
     │
     ▼ ContainerClient::connect()
     │
     ▼ list_containers(task_filter)
-    │  Docker API: GET /containers/json?filters={"label":["egret.managed=true"]}
+    │  Docker API: GET /containers/json?filters={"label":["lecs.managed=true"]}
     │  → Vec<ContainerInfo> { id, name, image, family, state }
     │
     ▼ format_table(&containers)
@@ -269,10 +269,10 @@ egret ps [family]
     ▼ println!("{table}")
 ```
 
-### `egret logs` データフロー
+### `lecs logs` データフロー
 
 ```
-egret logs <container> [--follow]
+lecs logs <container> [--follow]
     │
     ▼ ContainerClient::connect()
     │
@@ -303,9 +303,9 @@ egret logs <container> [--follow]
 | `host.source_path` が空文字 | **hard error** | `TaskDefError::Validation` | bind mount に必須 |
 | `container_path` が空文字 | **hard error** | `TaskDefError::Validation` | コンテナ内パスに必須 |
 | ボリュームの `host` が `None` | **warning** + skip | `tracing::warn` | EFS/Docker-managed volume は非対応 |
-| `egret ps` でコンテナなし | 正常終了 | - | "No egret containers found." を表示 |
-| `egret logs` でコンテナが見つからない | **hard error** | `anyhow::bail!` | ユーザの指定ミス |
-| `egret logs` でランタイム未起動 | **hard error** | `ContainerError::RuntimeNotRunning` | 既存のエラーハンドリング |
+| `lecs ps` でコンテナなし | 正常終了 | - | "No lecs containers found." を表示 |
+| `lecs logs` でコンテナが見つからない | **hard error** | `anyhow::bail!` | ユーザの指定ミス |
+| `lecs logs` でランタイム未起動 | **hard error** | `ContainerError::RuntimeNotRunning` | 既存のエラーハンドリング |
 | 色コード割り当て（コンテナ数 > 12） | 正常動作 | - | 色を循環使用 |
 
 ---
@@ -394,7 +394,7 @@ ECS と異なりローカルではコンテナ名に `{family}-` プレフィッ
 - Docker-managed volume（`host` なしボリューム）の Docker volume 作成
 - EFS / FSx ボリュームのエミュレーション
 - `--output json` / `--output wide`（Phase 7 で対応）
-- `egret ps` のリソース使用量表示（Phase 7 で対応）
+- `lecs ps` のリソース使用量表示（Phase 7 で対応）
 - ターミナル幅検出によるカラム幅自動調整
 - ログのタイムスタンプ付与
 - Windows コンソールの ANSI エスケープ互換性ハンドリング

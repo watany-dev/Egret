@@ -1,4 +1,4 @@
-//! `egret init` command implementation.
+//! `lecs init` command implementation.
 
 use anyhow::Result;
 
@@ -27,11 +27,11 @@ pub fn execute(args: &InitArgs) -> Result<()> {
             generate_task_definition(&args.family, &args.image),
         ),
         (
-            "egret-override.json",
+            "lecs-override.json",
             generate_override_template(container_name),
         ),
         ("secrets.local.json", generate_secrets_template()),
-        (".egret.toml", generate_egret_config()),
+        (".lecs.toml", generate_lecs_config()),
     ];
 
     for (filename, content) in &files {
@@ -50,11 +50,11 @@ pub fn execute(args: &InitArgs) -> Result<()> {
     } else {
         println!("\nNext steps:");
         println!(
-            "  egret validate -f {}/task-definition.json",
+            "  lecs validate -f {}/task-definition.json",
             args.dir.display()
         );
         println!(
-            "  egret run -f {}/task-definition.json --override {}/egret-override.json",
+            "  lecs run -f {}/task-definition.json --override {}/lecs-override.json",
             args.dir.display(),
             args.dir.display()
         );
@@ -105,9 +105,9 @@ pub fn generate_override_template(container_name: &str) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_default()
 }
 
-/// Generate an `.egret.toml` configuration template.
-pub fn generate_egret_config() -> String {
-    "# Egret configuration\n# default_profile = \"dev\"\n".to_string()
+/// Generate an `.lecs.toml` configuration template.
+pub fn generate_lecs_config() -> String {
+    "# Lecs configuration\n# default_profile = \"dev\"\n".to_string()
 }
 
 /// Generate a secrets mapping JSON template.
@@ -192,16 +192,16 @@ mod tests {
     }
 
     #[test]
-    fn generate_egret_config_is_valid_toml() {
-        let content = generate_egret_config();
+    fn generate_lecs_config_is_valid_toml() {
+        let content = generate_lecs_config();
         // All lines are comments, so parsing should succeed with default values
         let config: toml::Value = toml::from_str(&content).unwrap();
         assert!(config.as_table().unwrap().is_empty());
     }
 
     #[test]
-    fn generate_egret_config_has_commented_defaults() {
-        let content = generate_egret_config();
+    fn generate_lecs_config_has_commented_defaults() {
+        let content = generate_lecs_config();
         assert!(content.contains("# default_profile"));
     }
 

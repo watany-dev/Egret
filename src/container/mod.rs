@@ -24,13 +24,13 @@ pub enum ContainerError {
 
 /// Abstraction over container runtime operations for testability.
 pub trait ContainerRuntime: Send + Sync {
-    /// Create an Egret network. Reuses if it already exists.
+    /// Create an Lecs network. Reuses if it already exists.
     async fn create_network(&self, family: &str) -> Result<String, ContainerError>;
 
     /// Remove a network by name.
     async fn remove_network(&self, name: &str) -> Result<(), ContainerError>;
 
-    /// List Egret-managed networks, optionally filtered by task family.
+    /// List Lecs-managed networks, optionally filtered by task family.
     async fn list_networks(
         &self,
         task_filter: Option<&str>,
@@ -48,7 +48,7 @@ pub trait ContainerRuntime: Send + Sync {
     /// Remove a container by ID.
     async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
 
-    /// List Egret-managed containers, optionally filtered by task family.
+    /// List Lecs-managed containers, optionally filtered by task family.
     async fn list_containers(
         &self,
         task_filter: Option<&str>,
@@ -65,7 +65,7 @@ pub trait ContainerRuntime: Send + Sync {
     async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError>;
 }
 
-/// Egret container runtime client wrapping bollard.
+/// Lecs container runtime client wrapping bollard.
 pub struct ContainerClient {
     docker: Docker,
 }
@@ -131,7 +131,7 @@ pub struct ContainerStats {
     pub block_write_bytes: u64,
 }
 
-/// Information about an Egret-managed container.
+/// Information about an Lecs-managed container.
 pub struct ContainerInfo {
     pub id: String,
     pub name: String,
@@ -150,7 +150,7 @@ pub struct ContainerInfo {
     pub started_at: Option<String>,
 }
 
-/// Information about an Egret-managed network.
+/// Information about an Lecs-managed network.
 pub struct NetworkInfo {
     #[allow(dead_code)]
     pub id: String,
@@ -332,9 +332,9 @@ impl ContainerClient {
 #[cfg(not(tarpaulin_include))]
 impl ContainerRuntime for ContainerClient {
     async fn create_network(&self, family: &str) -> Result<String, ContainerError> {
-        let name = format!("egret-{family}");
+        let name = format!("lecs-{family}");
 
-        let labels = HashMap::from([("egret.managed", "true"), ("egret.task", family)]);
+        let labels = HashMap::from([("lecs.managed", "true"), ("lecs.task", family)]);
 
         // Check if network already exists
         let existing = self
@@ -371,9 +371,9 @@ impl ContainerRuntime for ContainerClient {
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<NetworkInfo>, ContainerError> {
-        let mut label_filters = vec!["egret.managed=true".to_string()];
+        let mut label_filters = vec!["lecs.managed=true".to_string()];
         if let Some(family) = task_filter {
-            label_filters.push(format!("egret.task={family}"));
+            label_filters.push(format!("lecs.task={family}"));
         }
 
         let networks = self
@@ -440,9 +440,9 @@ impl ContainerRuntime for ContainerClient {
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<ContainerInfo>, ContainerError> {
-        let mut label_filters = vec!["egret.managed=true".to_string()];
+        let mut label_filters = vec!["lecs.managed=true".to_string()];
         if let Some(family) = task_filter {
-            label_filters.push(format!("egret.task={family}"));
+            label_filters.push(format!("lecs.task={family}"));
         }
 
         let containers = self
@@ -484,7 +484,7 @@ impl ContainerRuntime for ContainerClient {
                         .map(|n| n.trim_start_matches('/').to_string())
                         .unwrap_or_default(),
                     image: c.image.unwrap_or_default(),
-                    family: labels.get("egret.task").cloned().unwrap_or_default(),
+                    family: labels.get("lecs.task").cloned().unwrap_or_default(),
                     state: c.state.unwrap_or_default(),
                     health_status: None, // populated via inspect when needed
                     ports,
@@ -642,7 +642,7 @@ fn extract_inspect_ports(resp: &bollard::models::ContainerInspectResponse) -> Ve
         .unwrap_or_default()
 }
 
-/// Build a bollard container `Config` from an Egret `ContainerConfig`.
+/// Build a bollard container `Config` from an Lecs `ContainerConfig`.
 ///
 /// Pure function — no container runtime interaction.
 #[allow(clippy::zero_sized_map_values)] // Container API requires HashMap for exposed_ports
@@ -860,9 +860,9 @@ mod tests {
                 container_port: 80,
                 protocol: "tcp".to_string(),
             }],
-            network: "egret-test".to_string(),
+            network: "lecs-test".to_string(),
             network_aliases: vec!["app".to_string()],
-            labels: HashMap::from([("egret.managed".into(), "true".into())]),
+            labels: HashMap::from([("lecs.managed".into(), "true".into())]),
             extra_hosts: vec![],
             health_check: None,
             binds: vec![],
@@ -960,8 +960,8 @@ mod tests {
             .expect("networking_config");
         let endpoint = net_config
             .endpoints_config
-            .get("egret-test")
-            .expect("endpoint for egret-test");
+            .get("lecs-test")
+            .expect("endpoint for lecs-test");
         assert_eq!(
             endpoint.aliases.as_deref(),
             Some(["app".to_string()].as_slice())

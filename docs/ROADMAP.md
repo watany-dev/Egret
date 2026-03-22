@@ -1,10 +1,10 @@
-# Egret: Local ECS Task Runner — 実装計画
+# Lecs: Local ECS Task Runner — 実装計画
 
 ## Context
 
 ECS にデプロイするアプリをローカルで動かすとき、ECS が提供する「実行時契約」（メタデータエンドポイント、クレデンシャルプロバイダ、dependsOn、ヘルスチェック等）がないと正しくテストできない。AWS 公式の `amazon-ecs-local-container-endpoints` は Metadata/Credentials のモックを提供するが、task definition ネイティブな CLI 体験・ネットワーク自動構築・dependsOn/ヘルスチェック統合はない。
 
-Egret は「ECS control plane の再現」ではなく「ECS アプリが期待する実行時契約をローカルで満たす」ことに特化した CLI ツール。
+Lecs は「ECS control plane の再現」ではなく「ECS アプリが期待する実行時契約をローカルで満たす」ことに特化した CLI ツール。
 
 ---
 
@@ -53,26 +53,26 @@ src/
 **目標**: ビルド可能な CLI スケルトン + 開発エコシステム
 
 - [x] `cargo init` + ディレクトリ作成 + 依存追加
-- [x] clap による `egret run --task-definition <file>` スケルトン
-- [x] `egret version` コマンド
+- [x] clap による `lecs run --task-definition <file>` スケルトン
+- [x] `lecs version` コマンド
 - [x] Makefile, `rustfmt.toml`, CI workflow
 - [x] `make check` が全て通ること
 
 ### Phase 1: Task Definition パース + 単一コンテナ実行 ✅
-**目標**: `egret run -f task-def.json` で単一コンテナが Docker/Podman 上で動く
+**目標**: `lecs run -f task-def.json` で単一コンテナが Docker/Podman 上で動く
 
 - [x] Task Definition JSON パーサ（serde で `containerDefinitions` の主要フィールド対応）
   - `name`, `image`, `command`, `entryPoint`, `environment`, `portMappings`
   - `cpu`, `memory`, `memoryReservation`, `essential`
 - [x] bollard でコンテナ作成・起動・ログストリーム表示
-- [x] 専用 network 作成（`egret-<task-name>`）
+- [x] 専用 network 作成（`lecs-<task-name>`）
 - [x] コンテナ名ベースの DNS 解決（bridge ネットワーク内）
-- [x] `egret stop` でクリーンアップ（コンテナ停止 + ネットワーク削除）
+- [x] `lecs stop` でクリーンアップ（コンテナ停止 + ネットワーク削除）
 
 ### Phase 2: ローカルオーバーライド + Secrets 差し替え ✅
 **目標**: 本番 task definition をそのまま使いつつ、ローカル固有の設定を上書き
 
-- [x] オーバーライドファイル（`egret-override.json`）
+- [x] オーバーライドファイル（`lecs-override.json`）
   - 環境変数の追加・上書き
   - イメージタグの差し替え
   - ポートマッピング変更
@@ -122,8 +122,8 @@ src/
 
 - [x] Bind mount ベースの volume（`volumes` + `mountPoints`）
 - [x] ログ統合（全コンテナのログを色分けマルチプレクス）
-- [x] `egret ps` — 実行中タスク一覧
-- [x] `egret logs <container>` — 特定コンテナのログ表示
+- [x] `lecs ps` — 実行中タスク一覧
+- [x] `lecs logs <container>` — 特定コンテナのログ表示
 - [x] Ctrl+C グレースフルシャットダウン（tokio signal handling）— Phase 1 で実装済み
 
 ### Phase 6: バリデーション + Init + Dry-run ✅
@@ -131,16 +131,16 @@ src/
 
 > Phase 3-5 と並行して着手可能（既存の `taskdef` / `overrides` モジュールのみに依存）
 
-- [x] `egret validate` — タスク定義の静的解析
+- [x] `lecs validate` — タスク定義の静的解析
   - イメージ名形式チェック、ポートマッピング競合検出
   - `dependsOn` 参照先の存在チェック、循環依存検出
   - Secret ARN 形式バリデーション
   - オーバーライドファイルのコンテナ名検証
   - よくあるミスへの警告（全コンテナ essential=false、ポートマッピングなし等）
-- [x] `egret init` — スターターファイル生成
-  - 最小限のタスク定義 JSON、`egret-override.json`、`secrets.local.json` のテンプレート
+- [x] `lecs init` — スターターファイル生成
+  - 最小限のタスク定義 JSON、`lecs-override.json`、`secrets.local.json` のテンプレート
   - `--image` / `--family` フラグによる非対話生成
-- [x] `--dry-run` フラグ（`egret run`）
+- [x] `--dry-run` フラグ（`lecs run`）
   - パース → バリデーション → オーバーライド適用 → Secrets 解決 → 構成表示（起動はしない）
   - コンテナ名、イメージ、環境変数（secrets 値は伏字）、ポート、ネットワーク名を出力
 - [x] リッチなバリデーションエラーメッセージ
@@ -151,19 +151,19 @@ src/
 
 > Phase 5 完了後に着手（ログ基盤・ps コマンドの存在が前提）
 
-- [x] 強化版 `egret ps`
+- [x] 強化版 `lecs ps`
   - ヘルスチェック状態（HEALTHY/UNHEALTHY/UNKNOWN）、ポートマッピング、起動時間
   - CPU/メモリ使用量スナップショット（`docker stats` 相当）
   - 出力形式: table（デフォルト）、`--output json`、`--output wide`
-- [x] `egret inspect <family>` — 実行中タスクの詳細表示
+- [x] `lecs inspect <family>` — 実行中タスクの詳細表示
   - マージ済み実効設定（タスク定義 + オーバーライド + 解決済み Secrets、値は伏字）
   - ネットワーク構成、ポートマッピング、コンテナ ID・イメージ
-- [x] `egret stats [family]` — リソース使用量表示
+- [x] `lecs stats [family]` — リソース使用量表示
   - CPU%、メモリ使用量、ネットワーク I/O、ブロック I/O をスナップショット表示
   - bollard の stats one-shot 利用
-- [x] `egret history` — 実行履歴の記録・表示
-  - `~/.egret/history.json` に保存（family、開始時刻、所要時間、終了状態、コンテナ数）
-  - `egret history --clear` でリセット
+- [x] `lecs history` — 実行履歴の記録・表示
+  - `~/.lecs/history.json` に保存（family、開始時刻、所要時間、終了状態、コンテナ数）
+  - `lecs history --clear` でリセット
 - [x] 構造化イベントログ
   - ライフサイクルイベント（作成、起動、ヘルスチェック通過/失敗、終了、クリーンアップ完了）
   - `--events` フラグで NDJSON 形式を stderr に出力（外部ツール連携用）
@@ -173,18 +173,18 @@ src/
 
 > Phase 6 完了後に着手、Phase 7 と並行可能
 
-- [x] `egret watch` — ファイル変更監視 + 自動再起動
+- [x] `lecs watch` — ファイル変更監視 + 自動再起動
   - タスク定義、オーバーライド、secrets ファイルの変更を検知
   - 変更時: 停止 → 再パース → 再バリデーション → 再起動
   - デバウンス付き（デフォルト 500ms、`--debounce` で変更可能）
   - `--watch-path` でアプリソース等の追加監視パスを指定可能
-- [x] `egret diff <file1> <file2>` — タスク定義のセマンティック diff
+- [x] `lecs diff <file1> <file2>` — タスク定義のセマンティック diff
   - テキスト diff ではなく、コンテナ・環境変数・ポート単位の意味的差分
   - 追加/削除/変更をシンボル（+/-/~）で色分け表示（`--no-color` で無効化可能）
 - [x] 設定プロファイル（`--profile`）
-  - `--profile dev` で `egret-override.dev.json` / `secrets.dev.json` を自動ロード
-  - `.egret.toml` でデフォルトプロファイル・タスク定義パスを設定
-- [x] `egret completions <shell>` — シェル補完スクリプト生成
+  - `--profile dev` で `lecs-override.dev.json` / `secrets.dev.json` を自動ロード
+  - `.lecs.toml` でデフォルトプロファイル・タスク定義パスを設定
+- [x] `lecs completions <shell>` — シェル補完スクリプト生成
   - bash / zsh / fish 対応（`clap_complete` 利用）
 
 ---

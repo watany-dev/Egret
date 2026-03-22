@@ -13,7 +13,7 @@ pub async fn execute(args: &InspectArgs, host: Option<&str>) -> Result<()> {
     execute_with_client(args, &client).await
 }
 
-/// Inspect Egret-managed containers for a given task family (testable with mock).
+/// Inspect Lecs-managed containers for a given task family (testable with mock).
 #[allow(clippy::print_stdout)]
 pub async fn execute_with_client(
     args: &InspectArgs,
@@ -68,7 +68,7 @@ pub async fn execute_with_client(
         // Display environment variables with secret masking
         if !inspection.env.is_empty() {
             let secret_names =
-                parse_secret_names(inspection.labels.get("egret.secrets").map(String::as_str));
+                parse_secret_names(inspection.labels.get("lecs.secrets").map(String::as_str));
             let _ = writeln!(output, "  Environment:");
             for env_var in &inspection.env {
                 let masked = mask_env_var(env_var, &secret_names);
@@ -152,7 +152,7 @@ mod tests {
             },
             image: "nginx:latest".into(),
             env: vec!["PORT=8080".into(), "DB_PASSWORD=secret123".into()],
-            network_name: Some("egret-my-app".into()),
+            network_name: Some("lecs-my-app".into()),
             ports: vec![PortInfo {
                 host_port: Some(8080),
                 container_port: 80,
@@ -264,7 +264,7 @@ mod tests {
         let mut inspection = make_inspection("web-id");
         inspection
             .labels
-            .insert("egret.secrets".into(), "DB_PASSWORD".into());
+            .insert("lecs.secrets".into(), "DB_PASSWORD".into());
 
         let mock = MockContainerClient {
             list_containers_results: Mutex::new(VecDeque::from([Ok(vec![make_container_info(

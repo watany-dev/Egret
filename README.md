@@ -1,4 +1,4 @@
-# Egret
+# Lecs
 
 Local ECS task runner — run ECS task definitions locally by satisfying the runtime contract ECS apps expect (metadata endpoints, credential providers, dependsOn, health checks), without recreating the ECS control plane.
 
@@ -9,60 +9,60 @@ Local ECS task runner — run ECS task definitions locally by satisfying the run
 make build
 
 # Run a task definition locally
-egret run -f task-definition.json
+lecs run -f task-definition.json
 
 # Run with local overrides and secrets
-egret run -f task-definition.json --override egret-override.json --secrets secrets.local.json
+lecs run -f task-definition.json --override lecs-override.json --secrets secrets.local.json
 
 # Run with a specific container runtime socket
-egret run -f task-definition.json --host unix:///run/podman/podman.sock
+lecs run -f task-definition.json --host unix:///run/podman/podman.sock
 
 # Run without metadata/credentials sidecar
-egret run -f task-definition.json --no-metadata
+lecs run -f task-definition.json --no-metadata
 
 # Dry-run: show resolved configuration without starting containers
-egret run -f task-definition.json --dry-run
+lecs run -f task-definition.json --dry-run
 
 # Validate a task definition
-egret validate -f task-definition.json
+lecs validate -f task-definition.json
 
 # Generate starter files for a new project
-egret init --dir my-project --image nginx:latest --family my-app
+lecs init --dir my-project --image nginx:latest --family my-app
 
 # List running tasks
-egret ps
+lecs ps
 
 # Show logs for a container
-egret logs app
+lecs logs app
 
 # Inspect running task details
-egret inspect my-app
+lecs inspect my-app
 
 # Show resource usage (CPU, memory, I/O)
-egret stats
+lecs stats
 
 # Show execution history
-egret history
+lecs history
 
 # Run with structured lifecycle events (NDJSON to stderr)
-egret run -f task-definition.json --events
+lecs run -f task-definition.json --events
 
 # Stop a specific task
-egret stop <family-name>
+lecs stop <family-name>
 
 # Stop all running tasks
-egret stop --all
+lecs stop --all
 
 # Compare two task definitions semantically
-egret diff task-v1.json task-v2.json
+lecs diff task-v1.json task-v2.json
 
 # Generate shell completion scripts
-egret completions bash > ~/.bash_completion.d/egret
-egret completions zsh > ~/.zfunc/_egret
-egret completions fish > ~/.config/fish/completions/egret.fish
+lecs completions bash > ~/.bash_completion.d/lecs
+lecs completions zsh > ~/.zfunc/_lecs
+lecs completions fish > ~/.config/fish/completions/lecs.fish
 
 # Show version
-egret version
+lecs version
 ```
 
 ## Installation
@@ -70,10 +70,10 @@ egret version
 ### From Source
 
 ```bash
-git clone https://github.com/watany-dev/Egret.git
-cd Egret
+git clone https://github.com/watany-dev/Lecs.git
+cd Lecs
 make build
-# Binary is at target/release/egret
+# Binary is at target/release/lecs
 ```
 
 ### Requirements
@@ -83,12 +83,12 @@ make build
 
 ## Usage
 
-### `egret run`
+### `lecs run`
 
 Parses an ECS task definition JSON file, creates a bridge network, starts containers in `dependsOn` DAG order (with health check and condition waiting), and streams their logs with `[container-name]` prefixes.
 
 ```bash
-egret run -f path/to/task-definition.json
+lecs run -f path/to/task-definition.json
 ```
 
 #### Options
@@ -96,7 +96,7 @@ egret run -f path/to/task-definition.json
 | Flag | Env Var | Description |
 |------|---------|-------------|
 | `-f, --task-definition` | — | Path to ECS task definition JSON (required) |
-| `--override` | — | Path to local override file (`egret-override.json`) |
+| `--override` | — | Path to local override file (`lecs-override.json`) |
 | `-s, --secrets` | — | Path to local secrets mapping file (`secrets.local.json`) |
 | `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
 | `--dry-run` | — | Show resolved configuration without starting containers |
@@ -105,25 +105,25 @@ egret run -f path/to/task-definition.json
 
 Press `Ctrl+C` to gracefully stop all containers and clean up resources.
 
-### `egret stop`
+### `lecs stop`
 
-Stops and removes Egret-managed containers and networks, identified by OCI labels.
+Stops and removes Lecs-managed containers and networks, identified by OCI labels.
 
 ```bash
 # Stop a specific task by family name
-egret stop my-app
+lecs stop my-app
 
-# Stop all Egret-managed tasks
-egret stop --all
+# Stop all Lecs-managed tasks
+lecs stop --all
 ```
 
-### `egret validate`
+### `lecs validate`
 
 Performs static analysis of task definition files, detecting errors before runtime.
 
 ```bash
-egret validate -f task-definition.json
-egret validate -f task-definition.json --override egret-override.json --secrets secrets.local.json
+lecs validate -f task-definition.json
+lecs validate -f task-definition.json --override lecs-override.json --secrets secrets.local.json
 ```
 
 Checks include:
@@ -136,13 +136,13 @@ Checks include:
 
 Diagnostics include field paths, severity levels (error/warning), and fix suggestions.
 
-### `egret init`
+### `lecs init`
 
-Generates starter files for a new Egret project.
+Generates starter files for a new Lecs project.
 
 ```bash
-egret init
-egret init --dir my-project --image node:20 --family web-service
+lecs init
+lecs init --dir my-project --image node:20 --family web-service
 ```
 
 | Flag | Default | Description |
@@ -151,88 +151,88 @@ egret init --dir my-project --image node:20 --family web-service
 | `--image` | `nginx:latest` | Container image for the initial definition |
 | `--family` | `my-app` | Task family name |
 
-Creates: `task-definition.json`, `egret-override.json`, `secrets.local.json`. Existing files are skipped.
+Creates: `task-definition.json`, `lecs-override.json`, `secrets.local.json`. Existing files are skipped.
 
-### `egret ps`
+### `lecs ps`
 
-Lists running Egret-managed tasks with status, health, ports, and uptime.
+Lists running Lecs-managed tasks with status, health, ports, and uptime.
 
 ```bash
-egret ps
-egret ps my-app
-egret ps --output json
+lecs ps
+lecs ps my-app
+lecs ps --output json
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--output` | Output format: `table` (default), `json` |
 
-### `egret inspect`
+### `lecs inspect`
 
 Shows detailed configuration for a running task (container IDs, images, environment variables with secrets masked).
 
 ```bash
-egret inspect my-app
+lecs inspect my-app
 ```
 
-### `egret stats`
+### `lecs stats`
 
 Shows resource usage snapshot (CPU%, memory, network I/O, block I/O) for running containers.
 
 ```bash
-egret stats
-egret stats my-app
+lecs stats
+lecs stats my-app
 ```
 
-### `egret history`
+### `lecs history`
 
-Displays execution history stored in `~/.egret/history.json`.
+Displays execution history stored in `~/.lecs/history.json`.
 
 ```bash
-egret history
-egret history --clear
+lecs history
+lecs history --clear
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--clear` | Delete all execution history |
 
-### `egret logs`
+### `lecs logs`
 
 Shows logs for a specific container.
 
 ```bash
-egret logs app
-egret logs app --follow
+lecs logs app
+lecs logs app --follow
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-f, --follow` | Follow log output (like `tail -f`) |
 
-### `egret diff`
+### `lecs diff`
 
 Compares two task definition files semantically, showing differences at the container, environment variable, and port level.
 
 ```bash
-egret diff task-v1.json task-v2.json
+lecs diff task-v1.json task-v2.json
 ```
 
 Output shows added (`+`), removed (`-`), and changed (`~`) fields organized by container.
 
-### `egret completions`
+### `lecs completions`
 
 Generates shell completion scripts for bash, zsh, or fish.
 
 ```bash
-egret completions bash   # Output bash completions
-egret completions zsh    # Output zsh completions
-egret completions fish   # Output fish completions
+lecs completions bash   # Output bash completions
+lecs completions zsh    # Output zsh completions
+lecs completions fish   # Output fish completions
 ```
 
 ### Container Runtime
 
-Egret supports both Docker and Podman via the Docker-compatible API. The runtime socket is resolved in the following priority:
+Lecs supports both Docker and Podman via the Docker-compatible API. The runtime socket is resolved in the following priority:
 
 1. `--host` flag or `CONTAINER_HOST` env var (explicit)
 2. `DOCKER_HOST` env var (Docker standard)
@@ -242,7 +242,7 @@ Egret supports both Docker and Podman via the Docker-compatible API. The runtime
 
 ### Task Definition Format
 
-Egret accepts standard ECS task definition JSON. Unsupported fields are silently ignored.
+Lecs accepts standard ECS task definition JSON. Unsupported fields are silently ignored.
 
 ```json
 {
@@ -320,7 +320,7 @@ Map Secrets Manager ARNs to local plaintext values:
 
 ### Container Dependencies (`dependsOn`)
 
-Egret respects ECS `dependsOn` declarations. Containers are started in topological order, and dependency conditions are enforced between startup layers:
+Lecs respects ECS `dependsOn` declarations. Containers are started in topological order, and dependency conditions are enforced between startup layers:
 
 | Condition | Behavior |
 |-----------|----------|
@@ -347,11 +347,11 @@ The `healthCheck` field is translated to a Docker `HEALTHCHECK` configuration:
 }
 ```
 
-When a container depends on another with the `HEALTHY` condition, Egret polls the container's health status until it becomes healthy or times out.
+When a container depends on another with the `HEALTHY` condition, Lecs polls the container's health status until it becomes healthy or times out.
 
 ### ECS Metadata + Credentials
 
-By default, Egret starts a local HTTP server that mocks the ECS metadata and credentials endpoints. Each container receives environment variables pointing to this server:
+By default, Lecs starts a local HTTP server that mocks the ECS metadata and credentials endpoints. Each container receives environment variables pointing to this server:
 
 - `ECS_CONTAINER_METADATA_URI_V4` — Container and task metadata (ECS v4 format)
 - `AWS_CONTAINER_CREDENTIALS_FULL_URI` — AWS credentials from the local credential chain

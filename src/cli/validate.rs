@@ -1,4 +1,4 @@
-//! `egret validate` command implementation.
+//! `lecs validate` command implementation.
 
 use anyhow::{Context, Result};
 

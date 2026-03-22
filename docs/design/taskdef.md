@@ -2,13 +2,13 @@
 
 ## 概要
 
-ECS タスク定義 JSON をパースし、Egret 内部の型に変換するモジュール。
+ECS タスク定義 JSON をパースし、Lecs 内部の型に変換するモジュール。
 `src/taskdef/mod.rs` に実装する。
 
 ## 入力仕様
 
 AWS ECS の [RegisterTaskDefinition API](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RegisterTaskDefinition.html) が受け付ける JSON 形式。
-Egret は Phase 1 で必要な主要フィールドのみ対応し、未知フィールドは無視する（`#[serde(deny_unknown_fields)]` は使わない）。
+Lecs は Phase 1 で必要な主要フィールドのみ対応し、未知フィールドは無視する（`#[serde(deny_unknown_fields)]` は使わない）。
 
 ### 技術選定
 
