@@ -264,12 +264,21 @@ mod tests {
 - `secrets` / `valueFrom` — Phase 2 で実装済み（`Secret` 構造体）
 - `taskRoleArn` / `executionRoleArn` — Phase 3 で実装済み（メタデータレスポンスで使用）
 
+## Phase 4 で追加されたフィールド
+
+- `healthCheck` — ヘルスチェック設定（`command`, `interval`, `timeout`, `retries`, `startPeriod`）
+- `dependsOn` — コンテナ依存関係（`containerName`, `condition`）
+- `DependencyCondition` 列挙型 — `START`, `COMPLETE`, `SUCCESS`, `HEALTHY`
+
+バリデーション追加:
+- 自己参照 dependsOn の検出
+- 存在しないコンテナ名への参照検出
+- `HEALTHY` 条件で `healthCheck` 未設定の検出
+
 ## 未対応フィールド
 
 以下のフィールドは後続フェーズで追加予定:
 
-- `healthCheck` → Phase 4
-- `dependsOn` → Phase 4
 - `volumes` / `mountPoints` → Phase 5
 - `logConfiguration` → Phase 5
 - `links`, `volumesFrom`, `dockerLabels`, `ulimits` 等 → 未定

@@ -7,7 +7,7 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StopContainerOptions,
 };
-use bollard::models::{EndpointSettings, HostConfig, PortBinding};
+use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
@@ -53,6 +53,12 @@ pub trait ContainerRuntime: Send + Sync {
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<ContainerInfo>, ContainerError>;
+
+    /// Inspect a container and return its current state.
+    async fn inspect_container(&self, id: &str) -> Result<ContainerInspection, ContainerError>;
+
+    /// Wait for a container to exit. Returns the exit status code.
+    async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError>;
 }
 
 /// Egret container runtime client wrapping bollard.
@@ -73,6 +79,22 @@ pub struct ContainerConfig {
     pub labels: HashMap<String, String>,
     /// Extra host-to-IP mappings (e.g., `host.docker.internal:host-gateway`).
     pub extra_hosts: Vec<String>,
+    /// Docker HEALTHCHECK configuration.
+    pub health_check: Option<HealthCheckConfig>,
+}
+
+/// Docker HEALTHCHECK configuration (nanosecond units).
+pub struct HealthCheckConfig {
+    /// Health check command (e.g. `["CMD-SHELL", "curl -f http://localhost/"]`).
+    pub test: Vec<String>,
+    /// Interval between health checks in nanoseconds.
+    pub interval_ns: i64,
+    /// Timeout for each check in nanoseconds.
+    pub timeout_ns: i64,
+    /// Number of consecutive failures before marking unhealthy.
+    pub retries: i64,
+    /// Grace period before health checks start in nanoseconds.
+    pub start_period_ns: i64,
 }
 
 /// Port mapping configuration.
@@ -97,6 +119,33 @@ pub struct NetworkInfo {
     #[allow(dead_code)]
     pub id: String,
     pub name: String,
+}
+
+/// Result of inspecting a container.
+pub struct ContainerInspection {
+    #[allow(dead_code)]
+    pub id: String,
+    pub state: ContainerState,
+}
+
+/// Container state from inspection.
+pub struct ContainerState {
+    /// Status string (e.g., "running", "exited").
+    #[allow(dead_code)]
+    pub status: String,
+    /// Whether the container is running.
+    #[allow(dead_code)]
+    pub running: bool,
+    /// Exit code (if exited).
+    #[allow(dead_code)]
+    pub exit_code: Option<i64>,
+    /// Health check status (e.g., "healthy", "unhealthy", "starting").
+    pub health_status: Option<String>,
+}
+
+/// Result of waiting for a container to exit.
+pub struct WaitResult {
+    pub status_code: i64,
 }
 
 /// Host URL scheme classification.
@@ -358,6 +407,40 @@ impl ContainerRuntime for ContainerClient {
             })
             .collect())
     }
+
+    async fn inspect_container(&self, id: &str) -> Result<ContainerInspection, ContainerError> {
+        let resp = self.docker.inspect_container(id, None).await?;
+        let state = resp.state.as_ref();
+
+        Ok(ContainerInspection {
+            id: resp.id.unwrap_or_default(),
+            state: ContainerState {
+                status: state
+                    .and_then(|s| s.status.as_ref())
+                    .map(|s| format!("{s:?}").to_lowercase())
+                    .unwrap_or_default(),
+                running: state.and_then(|s| s.running).unwrap_or(false),
+                exit_code: state.and_then(|s| s.exit_code),
+                health_status: state
+                    .and_then(|s| s.health.as_ref())
+                    .and_then(|h| h.status.as_ref())
+                    .map(|s| format!("{s:?}").to_lowercase()),
+            },
+        })
+    }
+
+    async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError> {
+        let response = self
+            .docker
+            .wait_container::<String>(id, None)
+            .next()
+            .await
+            .ok_or(ContainerError::RuntimeNotRunning)?
+            .map_err(ContainerError::from)?;
+        Ok(WaitResult {
+            status_code: response.status_code,
+        })
+    }
 }
 
 /// Build a bollard container `Config` from an Egret `ContainerConfig`.
@@ -419,6 +502,15 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         Some(config.env.clone())
     };
 
+    let healthcheck = config.health_check.as_ref().map(|hc| HealthConfig {
+        test: Some(hc.test.clone()),
+        interval: Some(hc.interval_ns),
+        timeout: Some(hc.timeout_ns),
+        retries: Some(hc.retries),
+        start_period: Some(hc.start_period_ns),
+        start_interval: None,
+    });
+
     Config {
         image: Some(config.image.clone()),
         cmd,
@@ -428,6 +520,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         host_config: Some(host_config),
         networking_config: Some(networking_config),
         labels: Some(config.labels.clone()),
+        healthcheck,
         ..Default::default()
     }
 }
@@ -450,6 +543,8 @@ pub mod test_support {
         pub remove_network_results: Mutex<VecDeque<Result<(), ContainerError>>>,
         pub list_containers_results: Mutex<VecDeque<Result<Vec<ContainerInfo>, ContainerError>>>,
         pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, ContainerError>>>,
+        pub inspect_container_results: Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
+        pub wait_container_results: Mutex<VecDeque<Result<WaitResult, ContainerError>>>,
     }
 
     impl MockContainerClient {
@@ -463,6 +558,8 @@ pub mod test_support {
                 remove_network_results: Mutex::new(VecDeque::new()),
                 list_containers_results: Mutex::new(VecDeque::new()),
                 list_networks_results: Mutex::new(VecDeque::new()),
+                inspect_container_results: Mutex::new(VecDeque::new()),
+                wait_container_results: Mutex::new(VecDeque::new()),
             }
         }
     }
@@ -520,6 +617,17 @@ pub mod test_support {
         ) -> Result<Vec<ContainerInfo>, ContainerError> {
             pop_result(&self.list_containers_results)
         }
+
+        async fn inspect_container(
+            &self,
+            _id: &str,
+        ) -> Result<ContainerInspection, ContainerError> {
+            pop_result(&self.inspect_container_results)
+        }
+
+        async fn wait_container(&self, _id: &str) -> Result<WaitResult, ContainerError> {
+            pop_result(&self.wait_container_results)
+        }
     }
 }
 
@@ -544,6 +652,7 @@ mod tests {
             network_aliases: vec!["app".to_string()],
             labels: HashMap::from([("egret.managed".into(), "true".into())]),
             extra_hosts: vec![],
+            health_check: None,
         }
     }
 
@@ -602,6 +711,7 @@ mod tests {
             network_aliases: vec![],
             labels: HashMap::new(),
             extra_hosts: vec![],
+            health_check: None,
         };
         let result = build_bollard_config(&config);
 
@@ -687,5 +797,41 @@ mod tests {
         let (scheme, path) = parse_host_url("/run/podman/podman.sock");
         assert_eq!(scheme, HostScheme::Unix);
         assert_eq!(path, "/run/podman/podman.sock");
+    }
+
+    #[test]
+    fn build_bollard_config_with_healthcheck() {
+        let mut config = sample_config();
+        config.health_check = Some(HealthCheckConfig {
+            test: vec!["CMD-SHELL".into(), "curl -f http://localhost/".into()],
+            interval_ns: 10_000_000_000,
+            timeout_ns: 5_000_000_000,
+            retries: 3,
+            start_period_ns: 15_000_000_000,
+        });
+
+        let result = build_bollard_config(&config);
+        let hc = result.healthcheck.as_ref().expect("healthcheck");
+        assert_eq!(
+            hc.test.as_deref(),
+            Some(
+                [
+                    "CMD-SHELL".to_string(),
+                    "curl -f http://localhost/".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(hc.interval, Some(10_000_000_000));
+        assert_eq!(hc.timeout, Some(5_000_000_000));
+        assert_eq!(hc.retries, Some(3));
+        assert_eq!(hc.start_period, Some(15_000_000_000));
+    }
+
+    #[test]
+    fn build_bollard_config_without_healthcheck() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        assert!(result.healthcheck.is_none());
     }
 }

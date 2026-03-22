@@ -105,13 +105,13 @@ src/
 ### Phase 4: dependsOn + Health Check
 **目標**: マルチコンテナ task の起動順序と健全性を制御
 
-- [ ] `dependsOn` の DAG 解決（トポロジカルソート）
+- [x] `dependsOn` の DAG 解決（トポロジカルソート）
   - 条件: `START`, `COMPLETE`, `SUCCESS`, `HEALTHY`
   - 循環依存の検出・エラー
-- [ ] Health Check 実行・監視
+- [x] Health Check 実行・監視
   - `healthCheck.command` を Docker HEALTHCHECK として設定
   - `interval`, `timeout`, `retries`, `startPeriod` 対応
-- [ ] essential コンテナ停止時のタスク全体停止
+- [x] essential コンテナ停止時のタスク全体停止
 
 ### Phase 5: Volume + ログ + UX 改善
 **目標**: 実用的な開発体験

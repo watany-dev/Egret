@@ -113,6 +113,17 @@ pub struct ContainerConfig {
     pub labels: HashMap<String, String>,
     /// 追加ホストエントリ（Phase 3 で追加: `host.docker.internal:host-gateway` 等）
     pub extra_hosts: Vec<String>,
+    /// ヘルスチェック設定（Phase 4 で追加）
+    pub health_check: Option<HealthCheckConfig>,
+}
+
+/// ヘルスチェック設定（ナノ秒単位、bollard 互換）
+pub struct HealthCheckConfig {
+    pub test: Vec<String>,
+    pub interval_ns: i64,
+    pub timeout_ns: i64,
+    pub retries: i64,
+    pub start_period_ns: i64,
 }
 
 /// ポートマッピング設定
@@ -141,6 +152,25 @@ pub struct NetworkInfo {
     /// ネットワーク名
     pub name: String,
 }
+
+/// コンテナ検査結果（Phase 4 で追加）
+pub struct ContainerInspection {
+    pub id: String,
+    pub state: ContainerState,
+}
+
+/// コンテナ状態（Phase 4 で追加）
+pub struct ContainerState {
+    pub status: String,
+    pub running: bool,
+    pub exit_code: Option<i64>,
+    pub health_status: Option<String>,
+}
+
+/// コンテナ終了待機結果（Phase 4 で追加）
+pub struct WaitResult {
+    pub status_code: i64,
+}
 ```
 
 ## エラー型
@@ -168,9 +198,10 @@ CLI 層で `ContainerError` を `anyhow` に変換して表示する。
 テスタビリティのため、コンテナランタイム操作を抽象化するトレイトを定義する。
 `ContainerClient` はこのトレイトを実装し、テストでは `MockContainerClient` で差し替える。
 
+Rust 1.93.0+ の RPITIT（Return Position Impl Trait in Traits）を使用し、`#[async_trait]` マクロは不要:
+
 ```rust
-#[async_trait::async_trait]
-pub trait ContainerRuntime {
+pub trait ContainerRuntime: Send + Sync {
     async fn create_network(&self, family: &str) -> Result<String, ContainerError>;
     async fn remove_network(&self, name: &str) -> Result<(), ContainerError>;
     async fn list_networks(&self, task_filter: Option<&str>) -> Result<Vec<NetworkInfo>, ContainerError>;
@@ -179,6 +210,8 @@ pub trait ContainerRuntime {
     async fn stop_container(&self, id: &str) -> Result<(), ContainerError>;
     async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
     async fn list_containers(&self, task_filter: Option<&str>) -> Result<Vec<ContainerInfo>, ContainerError>;
+    async fn inspect_container(&self, id: &str) -> Result<ContainerInspection, ContainerError>;
+    async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError>;
 }
 ```
 
@@ -265,6 +298,7 @@ fn podman_socket_candidates() -> Vec<String>;
 
 /// ContainerConfig を bollard の Config に変換する純粋関数
 /// extra_hosts が設定されている場合は HostConfig.extra_hosts に反映する
+/// health_check が設定されている場合は bollard::models::HealthConfig に変換する
 fn build_bollard_config(config: &ContainerConfig) -> Config<String>;
 ```
 
@@ -345,9 +379,16 @@ let networking_config = NetworkingConfig {
 - `extra_hosts` フィールド: `ContainerConfig` に追加。`build_bollard_config()` で `HostConfig.extra_hosts` に反映
 - メタデータサーバーアクセス用に `host.docker.internal:host-gateway` を全コンテナに設定
 
+## Phase 4 で追加された機能
+
+- `HealthCheckConfig` 構造体: `ContainerConfig` にヘルスチェック設定を追加
+- `build_bollard_config()` で `HealthCheckConfig` → `bollard::models::HealthConfig` に変換（ナノ秒単位）
+- `inspect_container()`: コンテナの状態とヘルスステータスを取得（`bollard::Docker::inspect_container` のラッパー）
+- `wait_container()`: コンテナの終了を待機（`bollard::Docker::wait_container` の Stream から最初のアイテムを取得）
+- `MockContainerClient` に `inspect_container_results` / `wait_container_results` キューを追加
+
 ## 制限事項
 
 - イメージの明示的な pull 制御は未実装（ランタイムのデフォルト動作に委ねる）
 - コンテナのリソース制限（CPU/メモリ）は設定するが、厳密な enforcement はランタイムに委ねる
 - ボリュームマウントは未対応 → Phase 5
-- ヘルスチェック設定は未対応 → Phase 4

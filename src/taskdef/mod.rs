@@ -1,5 +1,6 @@
 //! ECS task definition parsing and types.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -54,7 +55,6 @@ pub struct ContainerDefinition {
 
     /// Essential flag (default: true).
     #[serde(default = "default_essential")]
-    #[allow(dead_code)]
     pub essential: bool,
 
     /// CMD equivalent.
@@ -88,6 +88,14 @@ pub struct ContainerDefinition {
     /// Soft memory limit (MiB).
     #[allow(dead_code)]
     pub memory_reservation: Option<u32>,
+
+    /// Container dependencies (startup ordering).
+    #[serde(default)]
+    pub depends_on: Vec<DependsOn>,
+
+    /// Health check configuration.
+    #[serde(default)]
+    pub health_check: Option<HealthCheck>,
 }
 
 const fn default_essential() -> bool {
@@ -130,6 +138,66 @@ pub struct Secret {
     pub value_from: String,
 }
 
+/// Dependency condition for `dependsOn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DependencyCondition {
+    /// Container has started (default).
+    Start,
+    /// Container has exited (any exit code).
+    Complete,
+    /// Container has exited with code 0.
+    Success,
+    /// Container's health check reports healthy.
+    Healthy,
+}
+
+/// Container dependency reference.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependsOn {
+    /// Name of the container this dependency refers to.
+    pub container_name: String,
+    /// Condition that must be met before starting the dependent container.
+    pub condition: DependencyCondition,
+}
+
+/// Health check configuration (ECS-compatible, seconds).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthCheck {
+    /// Health check command (e.g. `["CMD-SHELL", "curl -f http://localhost/"]`).
+    pub command: Vec<String>,
+
+    /// Interval between health checks in seconds (default: 30).
+    #[serde(default = "default_health_interval")]
+    pub interval: u32,
+
+    /// Timeout for each health check in seconds (default: 5).
+    #[serde(default = "default_health_timeout")]
+    pub timeout: u32,
+
+    /// Number of consecutive failures before marking unhealthy (default: 3).
+    #[serde(default = "default_health_retries")]
+    pub retries: u32,
+
+    /// Grace period before health checks start in seconds (default: 0).
+    #[serde(default)]
+    pub start_period: u32,
+}
+
+const fn default_health_interval() -> u32 {
+    30
+}
+
+const fn default_health_timeout() -> u32 {
+    5
+}
+
+const fn default_health_retries() -> u32 {
+    3
+}
+
 impl TaskDefinition {
     /// Load a task definition from a file path.
     pub fn from_file(path: &Path) -> Result<Self, TaskDefError> {
@@ -145,6 +213,48 @@ impl TaskDefinition {
         let task_def: Self = serde_json::from_str(json)?;
         task_def.validate()?;
         Ok(task_def)
+    }
+
+    /// Validate `dependsOn` references.
+    fn validate_depends_on(&self) -> Result<(), TaskDefError> {
+        let names: HashSet<&str> = self
+            .container_definitions
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+
+        let has_health_check: HashSet<&str> = self
+            .container_definitions
+            .iter()
+            .filter(|c| c.health_check.is_some())
+            .map(|c| c.name.as_str())
+            .collect();
+
+        for container in &self.container_definitions {
+            for dep in &container.depends_on {
+                if dep.container_name == container.name {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' has a self-referencing dependsOn",
+                        container.name
+                    )));
+                }
+                if !names.contains(dep.container_name.as_str()) {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' depends on unknown container '{}'",
+                        container.name, dep.container_name
+                    )));
+                }
+                if dep.condition == DependencyCondition::Healthy
+                    && !has_health_check.contains(dep.container_name.as_str())
+                {
+                    return Err(TaskDefError::Validation(format!(
+                        "container '{}' depends on '{}' with HEALTHY condition, but '{}' has no healthCheck",
+                        container.name, dep.container_name, dep.container_name
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Validate the task definition (fail-fast).
@@ -172,7 +282,7 @@ impl TaskDefinition {
                 )));
             }
         }
-        Ok(())
+        self.validate_depends_on()
     }
 }
 
@@ -455,5 +565,218 @@ mod tests {
             matches!(err, TaskDefError::ReadFile { .. }),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_depends_on_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "db",
+                    "image": "postgres:16",
+                    "healthCheck": {
+                        "command": ["CMD-SHELL", "pg_isready"]
+                    }
+                },
+                {
+                    "name": "app",
+                    "image": "my-app:latest",
+                    "dependsOn": [
+                        { "containerName": "db", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let app = &task_def.container_definitions[1];
+        assert_eq!(app.depends_on.len(), 1);
+        assert_eq!(app.depends_on[0].container_name, "db");
+        assert_eq!(app.depends_on[0].condition, DependencyCondition::Healthy);
+    }
+
+    #[test]
+    fn parse_depends_on_empty_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.container_definitions[0].depends_on.is_empty());
+    }
+
+    #[test]
+    fn parse_health_check_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": {
+                        "command": ["CMD-SHELL", "curl -f http://localhost/"],
+                        "interval": 10,
+                        "timeout": 3,
+                        "retries": 5,
+                        "startPeriod": 15
+                    }
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let hc = task_def.container_definitions[0]
+            .health_check
+            .as_ref()
+            .expect("should have health check");
+        assert_eq!(hc.command, vec!["CMD-SHELL", "curl -f http://localhost/"]);
+        assert_eq!(hc.interval, 10);
+        assert_eq!(hc.timeout, 3);
+        assert_eq!(hc.retries, 5);
+        assert_eq!(hc.start_period, 15);
+    }
+
+    #[test]
+    fn parse_health_check_defaults() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": {
+                        "command": ["CMD-SHELL", "true"]
+                    }
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let hc = task_def.container_definitions[0]
+            .health_check
+            .as_ref()
+            .expect("should have health check");
+        assert_eq!(hc.command, vec!["CMD-SHELL", "true"]);
+        assert_eq!(hc.interval, 30);
+        assert_eq!(hc.timeout, 5);
+        assert_eq!(hc.retries, 3);
+        assert_eq!(hc.start_period, 0);
+    }
+
+    #[test]
+    fn parse_health_check_none_default() {
+        let task_def = TaskDefinition::from_json(minimal_json()).expect("should parse");
+        assert!(task_def.container_definitions[0].health_check.is_none());
+    }
+
+    #[test]
+    fn parse_dependency_condition_variants() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "a", "image": "alpine:latest" },
+                { "name": "b", "image": "alpine:latest" },
+                { "name": "c", "image": "alpine:latest" },
+                { "name": "d", "image": "alpine:latest", "healthCheck": { "command": ["CMD-SHELL", "true"] } },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "a", "condition": "START" },
+                        { "containerName": "b", "condition": "COMPLETE" },
+                        { "containerName": "c", "condition": "SUCCESS" },
+                        { "containerName": "d", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse");
+        let deps = &task_def.container_definitions[4].depends_on;
+        assert_eq!(deps.len(), 4);
+        assert_eq!(deps[0].condition, DependencyCondition::Start);
+        assert_eq!(deps[1].condition, DependencyCondition::Complete);
+        assert_eq!(deps[2].condition, DependencyCondition::Success);
+        assert_eq!(deps[3].condition, DependencyCondition::Healthy);
+    }
+
+    #[test]
+    fn validate_depends_on_unknown_container() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "nonexistent", "condition": "START" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("unknown container 'nonexistent'")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_depends_on_self_reference() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "app", "condition": "START" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("self-referencing")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_depends_on_healthy_requires_health_check() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "db", "image": "postgres:16" },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "db", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("has no healthCheck")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_depends_on_valid() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "db",
+                    "image": "postgres:16",
+                    "healthCheck": { "command": ["CMD-SHELL", "pg_isready"] }
+                },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [
+                        { "containerName": "db", "condition": "HEALTHY" }
+                    ]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(json).expect("should parse valid dependsOn");
+        assert_eq!(task_def.container_definitions[1].depends_on.len(), 1);
     }
 }

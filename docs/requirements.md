@@ -86,11 +86,11 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 
 | ID | 要件 | 状態 |
 |----|------|------|
-| FR-8.1 | `dependsOn` の DAG 解決（トポロジカルソート）に対応する | 🔲 未実装 |
-| FR-8.2 | 起動条件（`START`, `COMPLETE`, `SUCCESS`, `HEALTHY`）に対応する | 🔲 未実装 |
-| FR-8.3 | 循環依存を検出してエラーにする | 🔲 未実装 |
-| FR-8.4 | `healthCheck` を Docker HEALTHCHECK として設定する | 🔲 未実装 |
-| FR-8.5 | essential コンテナ停止時にタスク全体を停止する | 🔲 未実装 |
+| FR-8.1 | `dependsOn` の DAG 解決（トポロジカルソート）に対応する | ✅ 実装済み |
+| FR-8.2 | 起動条件（`START`, `COMPLETE`, `SUCCESS`, `HEALTHY`）に対応する | ✅ 実装済み |
+| FR-8.3 | 循環依存を検出してエラーにする | ✅ 実装済み |
+| FR-8.4 | `healthCheck` を Docker HEALTHCHECK として設定する | ✅ 実装済み |
+| FR-8.5 | essential コンテナ停止時にタスク全体を停止する | ✅ 実装済み |
 
 ### FR-9: UX 改善
 
