@@ -5,6 +5,7 @@ pub mod inspect;
 pub mod logs;
 pub mod ps;
 pub mod run;
+pub mod stats;
 pub mod stop;
 pub mod validate;
 pub mod version;
@@ -41,6 +42,8 @@ pub enum Command {
     Validate(ValidateArgs),
     /// Inspect a running task's configuration
     Inspect(InspectArgs),
+    /// Show live resource usage statistics
+    Stats(StatsArgs),
     /// Show version information
     Version,
 }
@@ -49,6 +52,20 @@ pub enum Command {
 pub struct InspectArgs {
     /// Task family name to inspect
     pub family: String,
+}
+
+#[derive(Parser)]
+pub struct StatsArgs {
+    /// Filter by task family name
+    pub family: Option<String>,
+
+    /// Update interval in seconds (for streaming mode)
+    #[arg(long, default_value = "2")]
+    pub interval: u64,
+
+    /// Show a single snapshot instead of streaming
+    #[arg(long)]
+    pub no_stream: bool,
 }
 
 #[derive(Parser)]
@@ -397,6 +414,43 @@ mod tests {
                 assert_eq!(args.family, "my-app");
             }
             _ => panic!("expected Inspect command"),
+        }
+    }
+
+    #[test]
+    fn parse_stats_command_defaults() {
+        let cli = Cli::try_parse_from(["egret", "stats"]).expect("should parse");
+        match cli.command {
+            Command::Stats(args) => {
+                assert!(args.family.is_none());
+                assert_eq!(args.interval, 2);
+                assert!(!args.no_stream);
+            }
+            _ => panic!("expected Stats command"),
+        }
+    }
+
+    #[test]
+    fn parse_stats_with_no_stream() {
+        let cli = Cli::try_parse_from(["egret", "stats", "--no-stream"]).expect("should parse");
+        match cli.command {
+            Command::Stats(args) => {
+                assert!(args.no_stream);
+            }
+            _ => panic!("expected Stats command"),
+        }
+    }
+
+    #[test]
+    fn parse_stats_with_family_and_interval() {
+        let cli = Cli::try_parse_from(["egret", "stats", "my-app", "--interval", "5"])
+            .expect("should parse");
+        match cli.command {
+            Command::Stats(args) => {
+                assert_eq!(args.family.as_deref(), Some("my-app"));
+                assert_eq!(args.interval, 5);
+            }
+            _ => panic!("expected Stats command"),
         }
     }
 

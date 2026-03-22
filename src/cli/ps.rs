@@ -171,7 +171,7 @@ fn format_duration_secs(total_secs: i64) -> String {
 }
 
 /// Format bytes as human-readable size.
-#[allow(clippy::cast_precision_loss, dead_code)]
+#[allow(clippy::cast_precision_loss)]
 pub fn format_bytes(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = KIB * 1024;
