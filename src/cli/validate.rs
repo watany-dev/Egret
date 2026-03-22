@@ -1,6 +1,6 @@
 //! `egret validate` command implementation.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::overrides::OverrideConfig;
 use crate::secrets::SecretsResolver;
@@ -40,43 +40,26 @@ pub fn execute_from_json(
     secrets_json: Option<&str>,
 ) -> Result<()> {
     // Parse the task definition
-    let task_def = match TaskDefinition::from_json(task_json) {
-        Ok(td) => td,
-        Err(e) => {
-            println!("{e}");
-            anyhow::bail!("validation failed: could not parse task definition");
-        }
-    };
+    let task_def = TaskDefinition::from_json(task_json)
+        .context("validation failed: could not parse task definition")?;
 
     // Run extended validation
     let mut report = diagnostics::validate_extended(&task_def);
 
     // Cross-validate overrides if provided
     if let Some(json) = override_json {
-        match OverrideConfig::from_json(json) {
-            Ok(overrides) => {
-                let diags = diagnostics::validate_overrides(&task_def, &overrides);
-                report.diagnostics.extend(diags);
-            }
-            Err(e) => {
-                println!("{e}");
-                anyhow::bail!("validation failed: could not parse override file");
-            }
-        }
+        let overrides = OverrideConfig::from_json(json)
+            .context("validation failed: could not parse override file")?;
+        let diags = diagnostics::validate_overrides(&task_def, &overrides);
+        report.diagnostics.extend(diags);
     }
 
     // Cross-validate secrets if provided
     if let Some(json) = secrets_json {
-        match SecretsResolver::from_json(json) {
-            Ok(resolver) => {
-                let diags = validate_secrets_coverage(&task_def, &resolver);
-                report.diagnostics.extend(diags);
-            }
-            Err(e) => {
-                println!("{e}");
-                anyhow::bail!("validation failed: could not parse secrets file");
-            }
-        }
+        let resolver = SecretsResolver::from_json(json)
+            .context("validation failed: could not parse secrets file")?;
+        let diags = validate_secrets_coverage(&task_def, &resolver);
+        report.diagnostics.extend(diags);
     }
 
     print_report(&report);
