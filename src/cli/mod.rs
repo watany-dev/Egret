@@ -443,8 +443,7 @@ mod tests {
 
     #[test]
     fn parse_stats_with_family() {
-        let cli =
-            Cli::try_parse_from(["egret", "stats", "my-app"]).expect("should parse");
+        let cli = Cli::try_parse_from(["egret", "stats", "my-app"]).expect("should parse");
         match cli.command {
             Command::Stats(args) => {
                 assert_eq!(args.family.as_deref(), Some("my-app"));
