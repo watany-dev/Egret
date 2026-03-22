@@ -232,6 +232,11 @@ impl ContainerClient {
                     .map_err(|_| ContainerError::RuntimeNotRunning)?
             }
             (HostScheme::Tcp, addr) => {
+                tracing::warn!(
+                    addr,
+                    "Connecting to Docker daemon over unencrypted HTTP — \
+                     credentials and container data may be exposed on the network"
+                );
                 let http_url = format!("http://{addr}");
                 Docker::connect_with_http(&http_url, 120, bollard::API_DEFAULT_VERSION)
                     .map_err(|_| ContainerError::RuntimeNotRunning)?
@@ -457,7 +462,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         port_bindings.insert(
             container_key,
             Some(vec![PortBinding {
-                host_ip: Some("0.0.0.0".to_string()),
+                host_ip: Some("127.0.0.1".to_string()),
                 host_port: Some(pm.host_port.to_string()),
             }]),
         );
@@ -674,7 +679,7 @@ mod tests {
             .as_ref()
             .expect("binding vec");
         assert_eq!(binding.len(), 1);
-        assert_eq!(binding[0].host_ip.as_deref(), Some("0.0.0.0"));
+        assert_eq!(binding[0].host_ip.as_deref(), Some("127.0.0.1"));
         assert_eq!(binding[0].host_port.as_deref(), Some("8080"));
     }
 

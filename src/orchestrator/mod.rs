@@ -734,6 +734,52 @@ mod tests {
         assert_eq!(result.exit_code, 137);
     }
 
+    #[tokio::test]
+    async fn wait_for_condition_healthy_without_health_check() {
+        let mock = MockContainerClient::new();
+        let result =
+            wait_for_condition(&mock, "id1", "app", DependencyCondition::Healthy, None).await;
+        assert!(
+            matches!(result, Err(OrchestratorError::ConditionNotMet(ref name, _)) if name == "app"),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn watch_essential_exit_handles_error() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Err(crate::container::ContainerError::RuntimeNotRunning));
+
+        let result = watch_essential_exit(&mock, "id1", "app").await;
+        assert_eq!(result.container_name, "app");
+        assert_eq!(result.exit_code, -1);
+    }
+
+    #[test]
+    fn orchestrator_error_display() {
+        let err = OrchestratorError::CyclicDependency("a -> b -> a".to_string());
+        assert_eq!(err.to_string(), "cyclic dependency detected: a -> b -> a");
+
+        let err = OrchestratorError::ConditionNotMet("app".to_string(), "timeout".to_string());
+        assert!(err.to_string().contains("app"));
+
+        let err = OrchestratorError::EssentialContainerFailed("web".to_string(), 137);
+        assert!(err.to_string().contains("web"));
+        assert!(err.to_string().contains("137"));
+
+        let err = OrchestratorError::HealthCheckTimeout("db".to_string());
+        assert!(err.to_string().contains("db"));
+    }
+
+    #[test]
+    fn format_cycle_path_short_input() {
+        assert_eq!(format_cycle_path(&[]), "unknown cycle");
+        assert_eq!(format_cycle_path(&["a"]), "unknown cycle");
+    }
+
     // --- orchestrate_startup tests ---
 
     use crate::container::ContainerConfig;

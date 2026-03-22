@@ -14,5 +14,10 @@
 tarpaulin-report.html
 tarpaulin-report.json
 
+# Secrets and credentials
+secrets*.json
+*.pem
+*.key
+
 # Claude Code local settings
 .claude/settings.local.json
