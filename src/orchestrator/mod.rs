@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::container::ContainerRuntime;
+use crate::events::{EventSink, EventType, LifecycleEvent};
 use crate::taskdef::{DependencyCondition, DependsOn, HealthCheck};
 
 /// Orchestrator errors.
@@ -201,6 +202,52 @@ pub struct StartupResult {
     pub started: Vec<(String, String)>,
 }
 
+/// Create and start a single container, emitting lifecycle events.
+async fn create_and_start_container(
+    client: &(impl ContainerRuntime + ?Sized),
+    spec: &ContainerSpec,
+    name: &str,
+    event_sink: &dyn EventSink,
+    started: &[(String, String)],
+) -> Result<String, (StartupResult, OrchestratorError)> {
+    let family = spec
+        .config
+        .labels
+        .get("egret.task")
+        .cloned()
+        .unwrap_or_default();
+    let id = client.create_container(&spec.config).await.map_err(|e| {
+        (
+            StartupResult {
+                started: started.to_vec(),
+            },
+            OrchestratorError::from(e),
+        )
+    })?;
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Created,
+        &family,
+        Some(name),
+        None,
+    ));
+    client.start_container(&id).await.map_err(|e| {
+        (
+            StartupResult {
+                started: started.to_vec(),
+            },
+            OrchestratorError::from(e),
+        )
+    })?;
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Started,
+        &family,
+        Some(name),
+        None,
+    ));
+    tracing::info!(container = %name, "Started container");
+    Ok(id)
+}
+
 /// Orchestrate container startup following the dependsOn DAG.
 ///
 /// 1. Resolve startup order using topological sort
@@ -211,6 +258,7 @@ pub struct StartupResult {
 pub async fn orchestrate_startup(
     client: &(impl ContainerRuntime + ?Sized),
     specs: Vec<ContainerSpec>,
+    event_sink: &dyn EventSink,
 ) -> Result<StartupResult, (StartupResult, OrchestratorError)> {
     // Build dependency info for DAG resolution
     let dep_infos: Vec<DependencyInfo> = specs
@@ -241,23 +289,10 @@ pub async fn orchestrate_startup(
         // Start all containers in this layer
         for name in layer {
             let spec = specs_by_name[name];
-            let id = client.create_container(&spec.config).await.map_err(|e| {
-                (
-                    StartupResult {
-                        started: started.clone(),
-                    },
-                    OrchestratorError::from(e),
-                )
-            })?;
-            client.start_container(&id).await.map_err(|e| {
-                (
-                    StartupResult {
-                        started: started.clone(),
-                    },
-                    OrchestratorError::from(e),
-                )
-            })?;
-            tracing::info!(container = %name, "Started container");
+            let id = create_and_start_container(
+                client, spec, name, event_sink, &started,
+            )
+            .await?;
             started.push((id.clone(), name.clone()));
             id_by_name.insert(name.clone(), id);
         }
@@ -413,6 +448,7 @@ async fn wait_for_healthy(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::events::NullEventSink;
     use crate::taskdef::DependencyCondition;
 
     fn dep(name: &str, depends: &[(&str, DependencyCondition)]) -> DependencyInfo {
@@ -815,7 +851,7 @@ mod tests {
         }
 
         let specs = vec![make_spec("a", &[]), make_spec("b", &[])];
-        let result = orchestrate_startup(&mock, specs).await.unwrap();
+        let result = orchestrate_startup(&mock, specs, &NullEventSink).await.unwrap();
         assert_eq!(result.started.len(), 2);
     }
 
@@ -838,7 +874,7 @@ mod tests {
             make_spec("a", &[]),
             make_spec("b", &[("a", DependencyCondition::Start)]),
         ];
-        let result = orchestrate_startup(&mock, specs).await.unwrap();
+        let result = orchestrate_startup(&mock, specs, &NullEventSink).await.unwrap();
         assert_eq!(result.started.len(), 2);
         assert_eq!(result.started[0].1, "a");
         assert_eq!(result.started[1].1, "b");
@@ -876,7 +912,7 @@ mod tests {
         let app_spec = make_spec("app", &[("db", DependencyCondition::Healthy)]);
 
         tokio::time::pause();
-        let result = orchestrate_startup(&mock, vec![db_spec, app_spec])
+        let result = orchestrate_startup(&mock, vec![db_spec, app_spec], &NullEventSink)
             .await
             .unwrap();
         assert_eq!(result.started.len(), 2);
@@ -891,7 +927,7 @@ mod tests {
             make_spec("b", &[("a", DependencyCondition::Start)]),
         ];
         let mock = MockContainerClient::new();
-        let err = orchestrate_startup(&mock, specs).await.unwrap_err();
+        let err = orchestrate_startup(&mock, specs, &NullEventSink).await.unwrap_err();
         assert!(
             matches!(err.1, OrchestratorError::CyclicDependency(_)),
             "unexpected: {:?}",
