@@ -20,7 +20,7 @@ pub enum CredentialError {
 }
 
 /// AWS credentials response format (ECS credential provider compatible).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 #[allow(dead_code)]
 pub struct AwsCredentials {
@@ -40,6 +40,18 @@ pub struct AwsCredentials {
     /// Role ARN these credentials are associated with (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role_arn: Option<String>,
+}
+
+impl std::fmt::Debug for AwsCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsCredentials")
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"[REDACTED]")
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .field("expiration", &self.expiration)
+            .field("role_arn", &self.role_arn)
+            .finish()
+    }
 }
 
 /// Load AWS credentials from the local environment.
@@ -153,6 +165,35 @@ mod tests {
         let json = serde_json::to_value(&creds).expect("should serialize");
         assert_eq!(json["RoleArn"], "arn:aws:iam::111:role/test");
         assert!(json.get("Token").is_none());
+    }
+
+    #[test]
+    fn debug_redacts_sensitive_fields() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: Some("session-token-value".to_string()),
+            expiration: "2026-03-21T01:00:00Z".to_string(),
+            role_arn: None,
+        };
+
+        let debug_output = format!("{creds:?}");
+        assert!(
+            !debug_output.contains("wJalrXUtnFEMI"),
+            "secret_access_key must be redacted in Debug output"
+        );
+        assert!(
+            !debug_output.contains("session-token-value"),
+            "token must be redacted in Debug output"
+        );
+        assert!(
+            debug_output.contains("AKIAIOSFODNN7EXAMPLE"),
+            "access_key_id should be visible in Debug output"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "redacted placeholder should appear"
+        );
     }
 
     #[test]

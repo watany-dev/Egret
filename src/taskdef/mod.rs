@@ -20,6 +20,9 @@ pub enum TaskDefError {
 
     #[error("task definition validation failed: {0}")]
     Validation(String),
+
+    #[error("task definition file too large ({size} bytes, max {max} bytes): {path}")]
+    FileTooLarge { path: PathBuf, size: u64, max: u64 },
 }
 
 /// ECS task definition top-level structure.
@@ -198,9 +201,23 @@ const fn default_health_retries() -> u32 {
     3
 }
 
+/// Maximum task definition file size (10 MB).
+const MAX_TASKDEF_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 impl TaskDefinition {
     /// Load a task definition from a file path.
     pub fn from_file(path: &Path) -> Result<Self, TaskDefError> {
+        let metadata = std::fs::metadata(path).map_err(|source| TaskDefError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if metadata.len() > MAX_TASKDEF_FILE_SIZE {
+            return Err(TaskDefError::FileTooLarge {
+                path: path.to_path_buf(),
+                size: metadata.len(),
+                max: MAX_TASKDEF_FILE_SIZE,
+            });
+        }
         let content = std::fs::read_to_string(path).map_err(|source| TaskDefError::ReadFile {
             path: path.to_path_buf(),
             source,
@@ -213,6 +230,23 @@ impl TaskDefinition {
         let task_def: Self = serde_json::from_str(json)?;
         task_def.validate()?;
         Ok(task_def)
+    }
+
+    /// Validate a health check command.
+    fn validate_health_check(hc: &HealthCheck, container_name: &str) -> Result<(), TaskDefError> {
+        if hc.command.is_empty() {
+            return Err(TaskDefError::Validation(format!(
+                "healthCheck command must not be empty for container '{container_name}'"
+            )));
+        }
+        let valid_prefixes = ["CMD-SHELL", "CMD", "NONE"];
+        if !valid_prefixes.contains(&hc.command[0].as_str()) {
+            return Err(TaskDefError::Validation(format!(
+                "healthCheck command must start with CMD-SHELL, CMD, or NONE for container '{container_name}', got '{}'",
+                hc.command[0]
+            )));
+        }
+        Ok(())
     }
 
     /// Validate `dependsOn` references.
@@ -280,6 +314,9 @@ impl TaskDefinition {
                     "container image must not be empty for container '{}'",
                     container.name
                 )));
+            }
+            if let Some(hc) = &container.health_check {
+                Self::validate_health_check(hc, &container.name)?;
             }
         }
         self.validate_depends_on()

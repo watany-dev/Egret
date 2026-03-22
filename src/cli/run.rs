@@ -166,7 +166,7 @@ async fn start_metadata_server(task_def: &TaskDefinition) -> Result<(MetadataSer
     let server = MetadataServer::start(state.clone()).await?;
     tracing::info!(
         port = server.port,
-        "ECS metadata server running on http://0.0.0.0:{}",
+        "ECS metadata server running on http://127.0.0.1:{}",
         server.port
     );
 

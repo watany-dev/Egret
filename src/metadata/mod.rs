@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::get;
@@ -221,7 +221,7 @@ impl MetadataServer {
     /// Returns a handle that can be used to shut down the server.
     #[allow(dead_code)]
     pub async fn start(state: SharedState) -> Result<Self, MetadataError> {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0")
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(MetadataError::Bind)?;
 
@@ -275,6 +275,9 @@ pub async fn update_container_id(state: &SharedState, name: &str, docker_id: &st
     }
 }
 
+/// Maximum request body size (1 MB).
+const MAX_BODY_SIZE: usize = 1_024 * 1_024;
+
 #[allow(dead_code)]
 fn build_router(state: SharedState) -> Router {
     Router::new()
@@ -287,6 +290,7 @@ fn build_router(state: SharedState) -> Router {
             "/v4/{container_name}/task/stats",
             get(stats_not_implemented),
         )
+        .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .with_state(state)
 }
 
