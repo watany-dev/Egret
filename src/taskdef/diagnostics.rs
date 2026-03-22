@@ -3,8 +3,11 @@
 //! Provides structured diagnostic types that collect all validation issues
 //! (rather than fail-fast) with field paths, suggestions, and severity levels.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+
+use crate::orchestrator::{self, DependencyInfo};
+use crate::overrides::OverrideConfig;
 
 use super::TaskDefinition;
 
@@ -114,7 +117,47 @@ pub fn validate_extended(task_def: &TaskDefinition) -> ValidationReport {
     // Port conflict checks
     diagnostics.extend(check_port_conflicts(task_def));
 
+    // DependsOn reference + cycle checks
+    diagnostics.extend(check_depends_on(task_def));
+
+    // Secret ARN format checks
+    diagnostics.extend(check_secret_arn_format(task_def));
+
+    // Common mistake warnings
+    diagnostics.extend(check_common_mistakes(task_def));
+
     ValidationReport { diagnostics }
+}
+
+/// Cross-validate override container names against task definition.
+pub fn validate_overrides(
+    task_def: &TaskDefinition,
+    overrides: &OverrideConfig,
+) -> Vec<ValidationDiagnostic> {
+    let names: HashSet<&str> = task_def
+        .container_definitions
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    overrides
+        .container_overrides
+        .keys()
+        .filter(|name| !names.contains(name.as_str()))
+        .map(|name| ValidationDiagnostic {
+            severity: Severity::Error,
+            field_path: format!("containerOverrides.{name}"),
+            message: format!("override references unknown container '{name}'"),
+            suggestion: Some(format!(
+                "available containers: {}",
+                names
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        })
+        .collect()
 }
 
 /// Validate Docker image name format.
@@ -183,6 +226,148 @@ fn check_image_format(image: &str, field_path: &str) -> Option<ValidationDiagnos
     }
 
     None
+}
+
+/// Check `dependsOn` references and detect circular dependencies.
+fn check_depends_on(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let names: HashSet<&str> = task_def
+        .container_definitions
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    // Check references exist
+    for (ci, container) in task_def.container_definitions.iter().enumerate() {
+        for (di, dep) in container.depends_on.iter().enumerate() {
+            if dep.container_name == container.name {
+                diagnostics.push(ValidationDiagnostic {
+                    severity: Severity::Error,
+                    field_path: format!("containerDefinitions[{ci}].dependsOn[{di}]"),
+                    message: format!(
+                        "container '{}' has a self-referencing dependency",
+                        container.name
+                    ),
+                    suggestion: None,
+                });
+            } else if !names.contains(dep.container_name.as_str()) {
+                diagnostics.push(ValidationDiagnostic {
+                    severity: Severity::Error,
+                    field_path: format!("containerDefinitions[{ci}].dependsOn[{di}]"),
+                    message: format!(
+                        "container '{}' depends on unknown container '{}'",
+                        container.name, dep.container_name
+                    ),
+                    suggestion: Some(format!(
+                        "available containers: {}",
+                        names.iter().copied().collect::<Vec<_>>().join(", ")
+                    )),
+                });
+            }
+        }
+    }
+
+    // Cycle detection via orchestrator's resolve_start_order
+    let deps: Vec<DependencyInfo> = task_def
+        .container_definitions
+        .iter()
+        .map(|c| DependencyInfo {
+            name: c.name.clone(),
+            depends_on: c.depends_on.clone(),
+        })
+        .collect();
+
+    if let Err(e) = orchestrator::resolve_start_order(&deps) {
+        diagnostics.push(ValidationDiagnostic {
+            severity: Severity::Error,
+            field_path: "containerDefinitions.dependsOn".to_string(),
+            message: e.to_string(),
+            suggestion: Some("remove or reorder dependencies to break the cycle".to_string()),
+        });
+    }
+
+    diagnostics
+}
+
+/// Validate secret ARN format.
+///
+/// Expects ARNs to start with `arn:aws:secretsmanager:` and have at least 6 colon-separated segments.
+fn check_secret_arn_format(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    for (ci, container) in task_def.container_definitions.iter().enumerate() {
+        for (si, secret) in container.secrets.iter().enumerate() {
+            let arn = &secret.value_from;
+            if !arn.starts_with("arn:aws:secretsmanager:") {
+                diagnostics.push(ValidationDiagnostic {
+                    severity: Severity::Warning,
+                    field_path: format!(
+                        "containerDefinitions[{ci}].secrets[{si}].valueFrom"
+                    ),
+                    message: format!(
+                        "secret ARN '{arn}' does not match expected format 'arn:aws:secretsmanager:...'"
+                    ),
+                    suggestion: Some(
+                        "use a full ARN like 'arn:aws:secretsmanager:us-east-1:123456789012:secret:name'"
+                            .to_string(),
+                    ),
+                });
+            } else if arn.split(':').count() < 7 {
+                diagnostics.push(ValidationDiagnostic {
+                    severity: Severity::Warning,
+                    field_path: format!(
+                        "containerDefinitions[{ci}].secrets[{si}].valueFrom"
+                    ),
+                    message: format!(
+                        "secret ARN '{arn}' appears incomplete (expected at least 7 colon-separated segments)"
+                    ),
+                    suggestion: Some(
+                        "use a full ARN like 'arn:aws:secretsmanager:us-east-1:123456789012:secret:name'"
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+    }
+
+    diagnostics
+}
+
+/// Warn on common mistakes in task definitions.
+fn check_common_mistakes(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // All containers have essential=false
+    if !task_def.container_definitions.is_empty()
+        && task_def
+            .container_definitions
+            .iter()
+            .all(|c| !c.essential)
+    {
+        diagnostics.push(ValidationDiagnostic {
+            severity: Severity::Warning,
+            field_path: "containerDefinitions.essential".to_string(),
+            message: "all containers have essential=false; the task will not stop when any container exits".to_string(),
+            suggestion: Some("set at least one container as essential".to_string()),
+        });
+    }
+
+    // No port mappings in entire task
+    if !task_def.container_definitions.is_empty()
+        && task_def
+            .container_definitions
+            .iter()
+            .all(|c| c.port_mappings.is_empty())
+    {
+        diagnostics.push(ValidationDiagnostic {
+            severity: Severity::Warning,
+            field_path: "containerDefinitions.portMappings".to_string(),
+            message: "no port mappings defined in any container".to_string(),
+            suggestion: Some("add port mappings if you need to access containers from the host".to_string()),
+        });
+    }
+
+    diagnostics
 }
 
 /// Detect host port conflicts across all containers.
@@ -405,6 +590,13 @@ mod tests {
         TaskDefinition::from_json(json).expect("test task def should parse")
     }
 
+    /// Parse a task definition without running fail-fast validation.
+    /// Used for testing diagnostics on invalid task definitions that would be
+    /// rejected by `TaskDefinition::validate()`.
+    fn make_task_def_unchecked(json: &str) -> TaskDefinition {
+        serde_json::from_str(json).expect("test task def should parse JSON")
+    }
+
     #[test]
     fn port_conflicts_none() {
         let td = make_task_def(r#"{
@@ -552,5 +744,327 @@ mod tests {
         }"#);
         let conflicts = check_port_conflicts(&td);
         assert_eq!(conflicts.len(), 1);
+    }
+
+    // --- dependsOn validation tests ---
+
+    #[test]
+    fn depends_on_valid_references() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "db",
+                    "image": "postgres:16",
+                    "healthCheck": { "command": ["CMD-SHELL", "pg_isready"] }
+                },
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "db", "condition": "HEALTHY" }]
+                }
+            ]
+        }"#);
+        let diags = check_depends_on(&td);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn depends_on_unknown_reference() {
+        let td = make_task_def_unchecked(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "nonexistent", "condition": "START" }]
+                }
+            ]
+        }"#);
+        let diags = check_depends_on(&td);
+        assert!(diags.iter().any(|d| d.severity == Severity::Error
+            && d.message.contains("unknown container")));
+    }
+
+    #[test]
+    fn depends_on_self_reference() {
+        let td = make_task_def_unchecked(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "app", "condition": "START" }]
+                }
+            ]
+        }"#);
+        let diags = check_depends_on(&td);
+        assert!(diags.iter().any(|d| d.severity == Severity::Error
+            && d.message.contains("self-referencing")));
+    }
+
+    #[test]
+    fn depends_on_circular_two_nodes() {
+        let td = make_task_def_unchecked(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "a",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "b", "condition": "START" }]
+                },
+                {
+                    "name": "b",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "a", "condition": "START" }]
+                }
+            ]
+        }"#);
+        let diags = check_depends_on(&td);
+        assert!(diags.iter().any(|d| d.severity == Severity::Error
+            && d.message.contains("cyclic")));
+    }
+
+    #[test]
+    fn depends_on_circular_three_nodes() {
+        let td = make_task_def_unchecked(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "a",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "c", "condition": "START" }]
+                },
+                {
+                    "name": "b",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "a", "condition": "START" }]
+                },
+                {
+                    "name": "c",
+                    "image": "alpine:latest",
+                    "dependsOn": [{ "containerName": "b", "condition": "START" }]
+                }
+            ]
+        }"#);
+        let diags = check_depends_on(&td);
+        assert!(diags.iter().any(|d| d.severity == Severity::Error
+            && d.message.contains("cyclic")));
+    }
+
+    // --- Secret ARN format tests ---
+
+    #[test]
+    fn secret_arn_valid() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "secrets": [
+                        { "name": "DB_PASS", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret" }
+                    ]
+                }
+            ]
+        }"#);
+        assert!(check_secret_arn_format(&td).is_empty());
+    }
+
+    #[test]
+    fn secret_arn_invalid_prefix() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "secrets": [
+                        { "name": "DB_PASS", "valueFrom": "not-an-arn" }
+                    ]
+                }
+            ]
+        }"#);
+        let diags = check_secret_arn_format(&td);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Severity::Warning);
+        assert!(diags[0].message.contains("does not match"));
+    }
+
+    #[test]
+    fn secret_arn_incomplete() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "secrets": [
+                        { "name": "DB_PASS", "valueFrom": "arn:aws:secretsmanager:us-east-1:123" }
+                    ]
+                }
+            ]
+        }"#);
+        let diags = check_secret_arn_format(&td);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("incomplete"));
+    }
+
+    #[test]
+    fn secret_arn_no_secrets_no_warnings() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#);
+        assert!(check_secret_arn_format(&td).is_empty());
+    }
+
+    // --- Common mistakes tests ---
+
+    #[test]
+    fn common_mistakes_all_essential_false() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "a", "image": "alpine:latest", "essential": false },
+                { "name": "b", "image": "alpine:latest", "essential": false }
+            ]
+        }"#);
+        let diags = check_common_mistakes(&td);
+        assert!(diags.iter().any(|d| d.message.contains("essential=false")));
+    }
+
+    #[test]
+    fn common_mistakes_no_port_mappings() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "a", "image": "alpine:latest" },
+                { "name": "b", "image": "alpine:latest" }
+            ]
+        }"#);
+        let diags = check_common_mistakes(&td);
+        assert!(diags.iter().any(|d| d.message.contains("no port mappings")));
+    }
+
+    #[test]
+    fn common_mistakes_normal_task_no_warnings() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "essential": true,
+                    "portMappings": [{ "containerPort": 80, "hostPort": 8080 }]
+                }
+            ]
+        }"#);
+        let diags = check_common_mistakes(&td);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn common_mistakes_has_essential_true_no_warning() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "a", "image": "alpine:latest", "essential": true },
+                { "name": "b", "image": "alpine:latest", "essential": false }
+            ]
+        }"#);
+        let diags = check_common_mistakes(&td);
+        assert!(!diags.iter().any(|d| d.message.contains("essential=false")));
+    }
+
+    // --- validate_overrides tests ---
+
+    #[test]
+    fn validate_overrides_valid_names() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#);
+        let overrides = OverrideConfig::from_json(r#"{
+            "containerOverrides": {
+                "app": { "image": "alpine:3.18" }
+            }
+        }"#)
+        .unwrap();
+        let diags = validate_overrides(&td, &overrides);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn validate_overrides_unknown_container() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#);
+        let overrides = OverrideConfig::from_json(r#"{
+            "containerOverrides": {
+                "nonexistent": { "image": "alpine:3.18" }
+            }
+        }"#)
+        .unwrap();
+        let diags = validate_overrides(&td, &overrides);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Severity::Error);
+        assert!(diags[0].message.contains("unknown container 'nonexistent'"));
+    }
+
+    #[test]
+    fn validate_overrides_empty() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#);
+        let overrides = OverrideConfig::from_json(r#"{
+            "containerOverrides": {}
+        }"#)
+        .unwrap();
+        let diags = validate_overrides(&td, &overrides);
+        assert!(diags.is_empty());
+    }
+
+    // --- validate_extended integration with all checks ---
+
+    #[test]
+    fn validate_extended_collects_all_issues() {
+        let td = make_task_def(r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "a",
+                    "image": ".bad-image",
+                    "essential": false,
+                    "portMappings": [
+                        { "containerPort": 80, "hostPort": 8080 },
+                        { "containerPort": 81, "hostPort": 8080 }
+                    ],
+                    "secrets": [
+                        { "name": "S", "valueFrom": "not-an-arn" }
+                    ]
+                },
+                {
+                    "name": "b",
+                    "image": "alpine:latest",
+                    "essential": false
+                }
+            ]
+        }"#);
+        let report = validate_extended(&td);
+        // Image error + port conflict error + secret ARN warning + essential warning + no ports warning (only for "all")
+        assert!(report.has_errors());
+        assert!(report.error_count() >= 2); // image + port conflict
+        assert!(report.warning_count() >= 1); // secret ARN at minimum
     }
 }
