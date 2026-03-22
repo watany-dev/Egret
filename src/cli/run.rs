@@ -10,6 +10,7 @@ use crate::container::{
     ContainerClient, ContainerConfig, ContainerRuntime, HealthCheckConfig, PortMappingConfig,
 };
 use crate::credentials;
+use crate::events::{EventSink, EventType, LifecycleEvent, NullEventSink};
 use crate::metadata::{
     self, ContainerMetadata, MetadataServer, ServerState, SharedState, build_container_metadata,
     build_task_metadata,
@@ -21,7 +22,7 @@ use crate::taskdef::{ContainerDefinition, Environment, MountPoint, TaskDefinitio
 
 /// Execute the `run` subcommand.
 #[cfg(not(tarpaulin_include))]
-#[allow(clippy::print_stdout)]
+#[allow(clippy::print_stdout, clippy::too_many_lines)]
 pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     let mut task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
@@ -86,8 +87,19 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     } else {
         None
     };
-    let (network_name, containers) =
-        run_task(&*client, &task_def, metadata_port, auth_token.as_deref()).await?;
+    let event_sink: Box<dyn EventSink> = if args.events {
+        Box::new(crate::events::NdjsonEventSink)
+    } else {
+        Box::new(NullEventSink)
+    };
+    let (network_name, containers) = run_task(
+        &*client,
+        &task_def,
+        metadata_port,
+        auth_token.as_deref(),
+        &*event_sink,
+    )
+    .await?;
 
     // Update container IDs in metadata server state
     if let Some(state) = &metadata_state {
@@ -103,7 +115,14 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         server.shutdown().await;
     }
 
-    cleanup(&*client, &containers, &network_name).await;
+    cleanup(
+        &*client,
+        &containers,
+        &network_name,
+        &*event_sink,
+        &task_def.family,
+    )
+    .await;
 
     Ok(())
 }
@@ -117,6 +136,7 @@ pub async fn run_task(
     task_def: &TaskDefinition,
     metadata_port: Option<u16>,
     auth_token: Option<&str>,
+    event_sink: &dyn EventSink,
 ) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
@@ -143,10 +163,17 @@ pub async fn run_task(
         })
         .collect();
 
-    match orchestrate_startup(client, specs).await {
+    match orchestrate_startup(client, specs, event_sink).await {
         Ok(result) => Ok((network_name, result.started)),
         Err((partial, err)) => {
-            cleanup(client, &partial.started, &network_name).await;
+            cleanup(
+                client,
+                &partial.started,
+                &network_name,
+                event_sink,
+                &task_def.family,
+            )
+            .await;
             Err(err.into())
         }
     }
@@ -207,6 +234,8 @@ pub async fn cleanup(
     client: &(impl ContainerRuntime + ?Sized),
     containers: &[(String, String)],
     network: &str,
+    event_sink: &dyn EventSink,
+    family: &str,
 ) {
     for (id, name) in containers {
         if let Err(e) = client.stop_container(id).await {
@@ -222,6 +251,13 @@ pub async fn cleanup(
         tracing::warn!(network = %network, error = %e, "Failed to remove network");
     }
     tracing::info!(network = %network, "Network removed");
+
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::CleanupCompleted,
+        family,
+        None,
+        None,
+    ));
 }
 
 /// ANSI color codes for log multiplexing (12 distinct colors).
@@ -311,11 +347,27 @@ fn build_container_config(
     volumes: &[Volume],
     auth_token: Option<&str>,
 ) -> ContainerConfig {
-    let labels = HashMap::from([
+    let mut labels = HashMap::from([
         ("egret.managed".into(), "true".into()),
         ("egret.task".into(), family.into()),
         ("egret.container".into(), def.name.clone()),
     ]);
+
+    // Store secret names for inspect masking
+    if !def.secrets.is_empty() {
+        let secret_names: Vec<String> = def.secrets.iter().map(|s| s.name.clone()).collect();
+        labels.insert("egret.secrets".into(), secret_names.join(","));
+    }
+
+    // Store dependency info for ps display
+    if !def.depends_on.is_empty() {
+        let deps: Vec<String> = def
+            .depends_on
+            .iter()
+            .map(|d| format!("{}:{:?}", d.container_name, d.condition))
+            .collect();
+        labels.insert("egret.depends_on".into(), deps.join(","));
+    }
 
     let mut env: Vec<String> = def
         .environment
@@ -546,7 +598,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let (network, containers) = run_task(&mock, &task_def, None, None)
+        let (network, containers) = run_task(&mock, &task_def, None, None, &NullEventSink)
             .await
             .expect("should succeed");
 
@@ -569,7 +621,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let (_, containers) = run_task(&mock, &task_def, None, None)
+        let (_, containers) = run_task(&mock, &task_def, None, None, &NullEventSink)
             .await
             .expect("should succeed");
 
@@ -588,7 +640,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let result = run_task(&mock, &task_def, None, None).await;
+        let result = run_task(&mock, &task_def, None, None, &NullEventSink).await;
         assert!(result.is_err());
     }
 
@@ -605,7 +657,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let result = run_task(&mock, &task_def, None, None).await;
+        let result = run_task(&mock, &task_def, None, None, &NullEventSink).await;
         assert!(result.is_err());
     }
 
@@ -619,7 +671,7 @@ mod tests {
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
-        cleanup(&mock, &containers, "egret-test").await;
+        cleanup(&mock, &containers, "egret-test", &NullEventSink, "test").await;
         // No panic = success (best-effort cleanup)
     }
 
@@ -635,7 +687,7 @@ mod tests {
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
-        cleanup(&mock, &containers, "egret-test").await;
+        cleanup(&mock, &containers, "egret-test", &NullEventSink, "test").await;
     }
 
     #[tokio::test]
@@ -650,7 +702,32 @@ mod tests {
         };
 
         let containers = vec![("c1".to_string(), "app".to_string())];
-        cleanup(&mock, &containers, "egret-test").await;
+        cleanup(&mock, &containers, "egret-test", &NullEventSink, "test").await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_emits_cleanup_completed_event() {
+        use crate::events::CollectingEventSink;
+
+        let mock = MockContainerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_network_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockContainerClient::new()
+        };
+
+        let containers = vec![("c1".to_string(), "app".to_string())];
+        let sink = CollectingEventSink::new();
+        cleanup(&mock, &containers, "egret-test", &sink, "my-app").await;
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].event_type,
+            crate::events::EventType::CleanupCompleted
+        ));
+        assert_eq!(events[0].family, "my-app");
+        assert!(events[0].container_name.is_none());
     }
 
     #[test]
@@ -1029,7 +1106,7 @@ mod tests {
             ],
         };
 
-        let (network, containers) = run_task(&mock, &task_def, None, None)
+        let (network, containers) = run_task(&mock, &task_def, None, None, &NullEventSink)
             .await
             .expect("should succeed");
 

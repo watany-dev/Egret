@@ -28,7 +28,7 @@ cargo install cargo-deny
 
 ## Architecture
 
-- `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, version
+- `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, inspect, stats, history, version
 - `src/taskdef/` — ECS task definition JSON parser, types, and validation diagnostics
 - `src/container/` — OCI container runtime client (bollard, Docker/Podman)
 - `src/overrides/` — Local override configuration
@@ -36,6 +36,8 @@ cargo install cargo-deny
 - `src/orchestrator/` — Container lifecycle and dependsOn DAG
 - `src/metadata/` — ECS metadata endpoint mock (axum)
 - `src/credentials/` — Credential provider mock
+- `src/events/` — Structured lifecycle event logging (NDJSON)
+- `src/history/` — Execution history persistence
 
 ## Key Dependencies
 

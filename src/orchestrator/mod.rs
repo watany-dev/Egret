@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::container::ContainerRuntime;
+use crate::events::{EventSink, EventType, LifecycleEvent};
 use crate::taskdef::{DependencyCondition, DependsOn, HealthCheck};
 
 /// Orchestrator errors.
@@ -184,6 +185,12 @@ fn format_cycle_path(path: &[&str]) -> String {
         )
 }
 
+/// Context for emitting lifecycle events during orchestration.
+pub struct EventContext<'a> {
+    pub event_sink: &'a dyn EventSink,
+    pub family: &'a str,
+}
+
 /// Container specification for orchestrated startup.
 pub struct ContainerSpec {
     pub name: String,
@@ -201,6 +208,52 @@ pub struct StartupResult {
     pub started: Vec<(String, String)>,
 }
 
+/// Create and start a single container, emitting lifecycle events.
+async fn create_and_start_container(
+    client: &(impl ContainerRuntime + ?Sized),
+    spec: &ContainerSpec,
+    name: &str,
+    event_sink: &dyn EventSink,
+    started: &[(String, String)],
+) -> Result<String, (StartupResult, OrchestratorError)> {
+    let family = spec
+        .config
+        .labels
+        .get("egret.task")
+        .cloned()
+        .unwrap_or_default();
+    let id = client.create_container(&spec.config).await.map_err(|e| {
+        (
+            StartupResult {
+                started: started.to_vec(),
+            },
+            OrchestratorError::from(e),
+        )
+    })?;
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Created,
+        &family,
+        Some(name),
+        None,
+    ));
+    client.start_container(&id).await.map_err(|e| {
+        (
+            StartupResult {
+                started: started.to_vec(),
+            },
+            OrchestratorError::from(e),
+        )
+    })?;
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Started,
+        &family,
+        Some(name),
+        None,
+    ));
+    tracing::info!(container = %name, "Started container");
+    Ok(id)
+}
+
 /// Orchestrate container startup following the dependsOn DAG.
 ///
 /// 1. Resolve startup order using topological sort
@@ -211,6 +264,7 @@ pub struct StartupResult {
 pub async fn orchestrate_startup(
     client: &(impl ContainerRuntime + ?Sized),
     specs: Vec<ContainerSpec>,
+    event_sink: &dyn EventSink,
 ) -> Result<StartupResult, (StartupResult, OrchestratorError)> {
     // Build dependency info for DAG resolution
     let dep_infos: Vec<DependencyInfo> = specs
@@ -241,23 +295,7 @@ pub async fn orchestrate_startup(
         // Start all containers in this layer
         for name in layer {
             let spec = specs_by_name[name];
-            let id = client.create_container(&spec.config).await.map_err(|e| {
-                (
-                    StartupResult {
-                        started: started.clone(),
-                    },
-                    OrchestratorError::from(e),
-                )
-            })?;
-            client.start_container(&id).await.map_err(|e| {
-                (
-                    StartupResult {
-                        started: started.clone(),
-                    },
-                    OrchestratorError::from(e),
-                )
-            })?;
-            tracing::info!(container = %name, "Started container");
+            let id = create_and_start_container(client, spec, name, event_sink, &started).await?;
             started.push((id.clone(), name.clone()));
             id_by_name.insert(name.clone(), id);
         }
@@ -271,15 +309,25 @@ pub async fn orchestrate_startup(
                     if let Some(dep_id) = id_by_name.get(&dep.container_name)
                         && waited.insert((dep.container_name.clone(), dep.condition))
                     {
-                        let dep_health_check = specs_by_name
-                            .get(dep.container_name.as_str())
-                            .and_then(|s| s.health_check.as_ref());
+                        let dep_spec = specs_by_name[dep.container_name.as_str()];
+                        let dep_family = dep_spec
+                            .config
+                            .labels
+                            .get("egret.task")
+                            .map(String::as_str)
+                            .unwrap_or_default();
+                        let dep_health_check = dep_spec.health_check.as_ref();
+                        let ctx = EventContext {
+                            event_sink,
+                            family: dep_family,
+                        };
                         wait_for_condition(
                             client,
                             dep_id,
                             &dep.container_name,
                             dep.condition,
                             dep_health_check,
+                            &ctx,
                         )
                         .await
                         .map_err(|e| {
@@ -300,12 +348,14 @@ pub async fn orchestrate_startup(
 }
 
 /// Wait for a dependency condition to be met.
+#[allow(clippy::too_many_arguments)]
 pub async fn wait_for_condition(
     client: &(impl ContainerRuntime + ?Sized),
     id: &str,
     name: &str,
     condition: DependencyCondition,
     health_check: Option<&HealthCheck>,
+    ctx: &EventContext<'_>,
 ) -> Result<(), OrchestratorError> {
     match condition {
         DependencyCondition::Start => {
@@ -315,10 +365,22 @@ pub async fn wait_for_condition(
         DependencyCondition::Complete => {
             let result = client.wait_container(id).await?;
             tracing::info!(container = %name, exit_code = result.status_code, "Container completed");
+            ctx.event_sink.emit(&LifecycleEvent::new(
+                EventType::Exited,
+                ctx.family,
+                Some(name),
+                Some(&format!("exit code: {}", result.status_code)),
+            ));
             Ok(())
         }
         DependencyCondition::Success => {
             let result = client.wait_container(id).await?;
+            ctx.event_sink.emit(&LifecycleEvent::new(
+                EventType::Exited,
+                ctx.family,
+                Some(name),
+                Some(&format!("exit code: {}", result.status_code)),
+            ));
             if result.status_code == 0 {
                 tracing::info!(container = %name, "Container completed successfully");
                 Ok(())
@@ -336,7 +398,7 @@ pub async fn wait_for_condition(
                     "HEALTHY condition requires a healthCheck".to_string(),
                 )
             })?;
-            wait_for_healthy(client, id, name, hc).await
+            wait_for_healthy(client, id, name, hc, ctx).await
         }
     }
 }
@@ -379,6 +441,7 @@ async fn wait_for_healthy(
     id: &str,
     name: &str,
     health_check: &HealthCheck,
+    ctx: &EventContext<'_>,
 ) -> Result<(), OrchestratorError> {
     let timeout_secs = u64::from(health_check.start_period)
         + u64::from(health_check.interval) * (u64::from(health_check.retries) + 1)
@@ -392,9 +455,21 @@ async fn wait_for_healthy(
             match inspection.state.health_status.as_deref() {
                 Some("healthy") => {
                     tracing::info!(container = %name, "Container is healthy");
+                    ctx.event_sink.emit(&LifecycleEvent::new(
+                        EventType::HealthCheckPassed,
+                        ctx.family,
+                        Some(name),
+                        None,
+                    ));
                     return Ok(());
                 }
                 Some("unhealthy") => {
+                    ctx.event_sink.emit(&LifecycleEvent::new(
+                        EventType::HealthCheckFailed,
+                        ctx.family,
+                        Some(name),
+                        Some("status: unhealthy"),
+                    ));
                     return Err(OrchestratorError::HealthCheckTimeout(name.to_string()));
                 }
                 _ => {
@@ -406,13 +481,22 @@ async fn wait_for_healthy(
 
     tokio::time::timeout(timeout, poll_future)
         .await
-        .map_err(|_| OrchestratorError::HealthCheckTimeout(name.to_string()))?
+        .map_err(|_| {
+            ctx.event_sink.emit(&LifecycleEvent::new(
+                EventType::HealthCheckFailed,
+                ctx.family,
+                Some(name),
+                Some("timed out"),
+            ));
+            OrchestratorError::HealthCheckTimeout(name.to_string())
+        })?
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::events::{CollectingEventSink, NullEventSink};
     use crate::taskdef::DependencyCondition;
 
     fn dep(name: &str, depends: &[(&str, DependencyCondition)]) -> DependencyInfo {
@@ -550,11 +634,25 @@ mod tests {
     use crate::container::{ContainerInspection, ContainerState, WaitResult};
     use crate::taskdef::HealthCheck;
 
+    fn null_ctx() -> EventContext<'static> {
+        EventContext {
+            event_sink: &NullEventSink,
+            family: "test",
+        }
+    }
+
     #[tokio::test]
     async fn wait_for_condition_start_returns_immediately() {
         let mock = MockContainerClient::new();
-        let result =
-            wait_for_condition(&mock, "id1", "app", DependencyCondition::Start, None).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "app",
+            DependencyCondition::Start,
+            None,
+            &null_ctx(),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -566,8 +664,15 @@ mod tests {
             .unwrap()
             .push_back(Ok(WaitResult { status_code: 1 }));
 
-        let result =
-            wait_for_condition(&mock, "id1", "app", DependencyCondition::Complete, None).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "app",
+            DependencyCondition::Complete,
+            None,
+            &null_ctx(),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -579,8 +684,15 @@ mod tests {
             .unwrap()
             .push_back(Ok(WaitResult { status_code: 0 }));
 
-        let result =
-            wait_for_condition(&mock, "id1", "app", DependencyCondition::Success, None).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "app",
+            DependencyCondition::Success,
+            None,
+            &null_ctx(),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -592,8 +704,15 @@ mod tests {
             .unwrap()
             .push_back(Ok(WaitResult { status_code: 1 }));
 
-        let result =
-            wait_for_condition(&mock, "id1", "app", DependencyCondition::Success, None).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "app",
+            DependencyCondition::Success,
+            None,
+            &null_ctx(),
+        )
+        .await;
         assert!(
             matches!(result, Err(OrchestratorError::ConditionNotMet(ref name, _)) if name == "app"),
             "unexpected: {result:?}"
@@ -606,24 +725,8 @@ mod tests {
         // First poll: starting, second poll: healthy
         {
             let mut q = mock.inspect_container_results.lock().unwrap();
-            q.push_back(Ok(ContainerInspection {
-                id: "id1".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("starting".into()),
-                },
-            }));
-            q.push_back(Ok(ContainerInspection {
-                id: "id1".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("healthy".into()),
-                },
-            }));
+            q.push_back(Ok(make_inspection("id1", Some("starting"))));
+            q.push_back(Ok(make_inspection("id1", Some("healthy"))));
         }
 
         let hc = HealthCheck {
@@ -633,8 +736,15 @@ mod tests {
             retries: 3,
             start_period: 0,
         };
-        let result =
-            wait_for_condition(&mock, "id1", "db", DependencyCondition::Healthy, Some(&hc)).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+            &null_ctx(),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -644,15 +754,7 @@ mod tests {
         mock.inspect_container_results
             .lock()
             .unwrap()
-            .push_back(Ok(ContainerInspection {
-                id: "id1".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("unhealthy".into()),
-                },
-            }));
+            .push_back(Ok(make_inspection("id1", Some("unhealthy"))));
 
         let hc = HealthCheck {
             command: vec!["CMD-SHELL".into(), "false".into()],
@@ -661,8 +763,15 @@ mod tests {
             retries: 1,
             start_period: 0,
         };
-        let result =
-            wait_for_condition(&mock, "id1", "db", DependencyCondition::Healthy, Some(&hc)).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+            &null_ctx(),
+        )
+        .await;
         assert!(
             matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
             "unexpected: {result:?}"
@@ -677,15 +786,7 @@ mod tests {
             mock.inspect_container_results
                 .lock()
                 .unwrap()
-                .push_back(Ok(ContainerInspection {
-                    id: "id1".into(),
-                    state: ContainerState {
-                        status: "running".into(),
-                        running: true,
-                        exit_code: None,
-                        health_status: Some("starting".into()),
-                    },
-                }));
+                .push_back(Ok(make_inspection("id1", Some("starting"))));
         }
 
         let hc = HealthCheck {
@@ -698,8 +799,15 @@ mod tests {
 
         // Use tokio::time::pause for deterministic time control
         tokio::time::pause();
-        let result =
-            wait_for_condition(&mock, "id1", "db", DependencyCondition::Healthy, Some(&hc)).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+            &null_ctx(),
+        )
+        .await;
         assert!(
             matches!(result, Err(OrchestratorError::HealthCheckTimeout(ref name)) if name == "db"),
             "unexpected: {result:?}"
@@ -737,8 +845,15 @@ mod tests {
     #[tokio::test]
     async fn wait_for_condition_healthy_without_health_check() {
         let mock = MockContainerClient::new();
-        let result =
-            wait_for_condition(&mock, "id1", "app", DependencyCondition::Healthy, None).await;
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "app",
+            DependencyCondition::Healthy,
+            None,
+            &null_ctx(),
+        )
+        .await;
         assert!(
             matches!(result, Err(OrchestratorError::ConditionNotMet(ref name, _)) if name == "app"),
             "unexpected: {result:?}"
@@ -778,6 +893,24 @@ mod tests {
     fn format_cycle_path_short_input() {
         assert_eq!(format_cycle_path(&[]), "unknown cycle");
         assert_eq!(format_cycle_path(&["a"]), "unknown cycle");
+    }
+
+    fn make_inspection(id: &str, health_status: Option<&str>) -> ContainerInspection {
+        ContainerInspection {
+            id: id.into(),
+            state: ContainerState {
+                status: "running".into(),
+                running: true,
+                exit_code: None,
+                health_status: health_status.map(String::from),
+            },
+            image: String::new(),
+            env: vec![],
+            network_name: None,
+            ports: vec![],
+            started_at: None,
+            labels: HashMap::new(),
+        }
     }
 
     // --- orchestrate_startup tests ---
@@ -829,7 +962,9 @@ mod tests {
         }
 
         let specs = vec![make_spec("a", &[]), make_spec("b", &[])];
-        let result = orchestrate_startup(&mock, specs).await.unwrap();
+        let result = orchestrate_startup(&mock, specs, &NullEventSink)
+            .await
+            .unwrap();
         assert_eq!(result.started.len(), 2);
     }
 
@@ -852,7 +987,9 @@ mod tests {
             make_spec("a", &[]),
             make_spec("b", &[("a", DependencyCondition::Start)]),
         ];
-        let result = orchestrate_startup(&mock, specs).await.unwrap();
+        let result = orchestrate_startup(&mock, specs, &NullEventSink)
+            .await
+            .unwrap();
         assert_eq!(result.started.len(), 2);
         assert_eq!(result.started[0].1, "a");
         assert_eq!(result.started[1].1, "b");
@@ -876,15 +1013,7 @@ mod tests {
         mock.inspect_container_results
             .lock()
             .unwrap()
-            .push_back(Ok(ContainerInspection {
-                id: "id-db".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("healthy".into()),
-                },
-            }));
+            .push_back(Ok(make_inspection("id-db", Some("healthy"))));
 
         let mut db_spec = make_spec("db", &[]);
         db_spec.health_check = Some(HealthCheck {
@@ -898,7 +1027,7 @@ mod tests {
         let app_spec = make_spec("app", &[("db", DependencyCondition::Healthy)]);
 
         tokio::time::pause();
-        let result = orchestrate_startup(&mock, vec![db_spec, app_spec])
+        let result = orchestrate_startup(&mock, vec![db_spec, app_spec], &NullEventSink)
             .await
             .unwrap();
         assert_eq!(result.started.len(), 2);
@@ -913,12 +1042,248 @@ mod tests {
             make_spec("b", &[("a", DependencyCondition::Start)]),
         ];
         let mock = MockContainerClient::new();
-        let err = orchestrate_startup(&mock, specs).await.unwrap_err();
+        let err = orchestrate_startup(&mock, specs, &NullEventSink)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err.1, OrchestratorError::CyclicDependency(_)),
             "unexpected: {:?}",
             err.1
         );
         assert!(err.0.started.is_empty());
+    }
+
+    // --- Event emission tests ---
+
+    #[tokio::test]
+    async fn wait_for_condition_complete_emits_exited_event() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 42 }));
+
+        let sink = CollectingEventSink::new();
+        let ctx = EventContext {
+            event_sink: &sink,
+            family: "my-app",
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "worker",
+            DependencyCondition::Complete,
+            None,
+            &ctx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event_type, EventType::Exited));
+        assert_eq!(events[0].container_name.as_deref(), Some("worker"));
+        assert_eq!(events[0].family, "my-app");
+        assert_eq!(events[0].details.as_deref(), Some("exit code: 42"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_condition_success_emits_exited_event() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 0 }));
+
+        let sink = CollectingEventSink::new();
+        let ctx = EventContext {
+            event_sink: &sink,
+            family: "my-app",
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "init",
+            DependencyCondition::Success,
+            None,
+            &ctx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event_type, EventType::Exited));
+        assert_eq!(events[0].details.as_deref(), Some("exit code: 0"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_condition_success_nonzero_emits_exited_event() {
+        let mock = MockContainerClient::new();
+        mock.wait_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(WaitResult { status_code: 1 }));
+
+        let sink = CollectingEventSink::new();
+        let ctx = EventContext {
+            event_sink: &sink,
+            family: "my-app",
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "init",
+            DependencyCondition::Success,
+            None,
+            &ctx,
+        )
+        .await;
+        assert!(result.is_err());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event_type, EventType::Exited));
+        assert_eq!(events[0].details.as_deref(), Some("exit code: 1"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_healthy_emits_health_check_passed() {
+        let mock = MockContainerClient::new();
+        mock.inspect_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(make_inspection("id1", Some("healthy"))));
+
+        let hc = HealthCheck {
+            command: vec!["CMD-SHELL".into(), "true".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 3,
+            start_period: 0,
+        };
+        let sink = CollectingEventSink::new();
+        let ctx = EventContext {
+            event_sink: &sink,
+            family: "my-app",
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event_type, EventType::HealthCheckPassed));
+        assert_eq!(events[0].container_name.as_deref(), Some("db"));
+        assert_eq!(events[0].family, "my-app");
+    }
+
+    #[tokio::test]
+    async fn wait_for_unhealthy_emits_health_check_failed() {
+        let mock = MockContainerClient::new();
+        mock.inspect_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(make_inspection("id1", Some("unhealthy"))));
+
+        let hc = HealthCheck {
+            command: vec!["CMD-SHELL".into(), "false".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 1,
+            start_period: 0,
+        };
+        let sink = CollectingEventSink::new();
+        let ctx = EventContext {
+            event_sink: &sink,
+            family: "my-app",
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_err());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event_type, EventType::HealthCheckFailed));
+        assert_eq!(events[0].container_name.as_deref(), Some("db"));
+        assert_eq!(events[0].details.as_deref(), Some("status: unhealthy"));
+    }
+
+    #[tokio::test]
+    async fn wait_for_healthy_timeout_emits_health_check_failed() {
+        let mock = MockContainerClient::new();
+        for _ in 0..100 {
+            mock.inspect_container_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(make_inspection("id1", Some("starting"))));
+        }
+
+        let hc = HealthCheck {
+            command: vec!["CMD-SHELL".into(), "true".into()],
+            interval: 1,
+            timeout: 1,
+            retries: 1,
+            start_period: 0,
+        };
+
+        tokio::time::pause();
+        let sink = CollectingEventSink::new();
+        let ctx = EventContext {
+            event_sink: &sink,
+            family: "my-app",
+        };
+        let result = wait_for_condition(
+            &mock,
+            "id1",
+            "db",
+            DependencyCondition::Healthy,
+            Some(&hc),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_err());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event_type, EventType::HealthCheckFailed));
+        assert_eq!(events[0].details.as_deref(), Some("timed out"));
+    }
+
+    #[tokio::test]
+    async fn orchestrate_startup_emits_created_and_started_events() {
+        let mock = MockContainerClient::new();
+        mock.create_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok("id-a".to_string()));
+        mock.start_container_results
+            .lock()
+            .unwrap()
+            .push_back(Ok(()));
+
+        let specs = vec![make_spec("a", &[])];
+        let sink = CollectingEventSink::new();
+        let result = orchestrate_startup(&mock, specs, &sink).await.unwrap();
+        assert_eq!(result.started.len(), 1);
+
+        let events = sink.events();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0].event_type, EventType::Created));
+        assert!(matches!(events[1].event_type, EventType::Started));
     }
 }

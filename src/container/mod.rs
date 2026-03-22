@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use bollard::Docker;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
-    StopContainerOptions,
+    StatsOptions, StopContainerOptions,
 };
 use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
@@ -59,6 +59,10 @@ pub trait ContainerRuntime: Send + Sync {
 
     /// Wait for a container to exit. Returns the exit status code.
     async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError>;
+
+    /// Get a single snapshot of resource usage statistics for a container.
+    #[allow(dead_code)]
+    async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError>;
 }
 
 /// Egret container runtime client wrapping bollard.
@@ -106,6 +110,27 @@ pub struct PortMappingConfig {
     pub protocol: String,
 }
 
+/// Port information for a running container.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct PortInfo {
+    pub host_port: Option<u16>,
+    pub container_port: u16,
+    pub protocol: String,
+}
+
+/// Resource usage statistics for a container.
+#[allow(dead_code)]
+pub struct ContainerStats {
+    pub cpu_percent: f64,
+    pub memory_usage: u64,
+    pub memory_limit: u64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+    pub block_read_bytes: u64,
+    pub block_write_bytes: u64,
+}
+
 /// Information about an Egret-managed container.
 pub struct ContainerInfo {
     pub id: String,
@@ -114,6 +139,15 @@ pub struct ContainerInfo {
     pub image: String,
     pub family: String,
     pub state: String,
+    /// Health check status (e.g., "healthy", "unhealthy", "starting").
+    #[allow(dead_code)]
+    pub health_status: Option<String>,
+    /// Port mappings for the container.
+    #[allow(dead_code)]
+    pub ports: Vec<PortInfo>,
+    /// ISO 8601 timestamp when the container was started.
+    #[allow(dead_code)]
+    pub started_at: Option<String>,
 }
 
 /// Information about an Egret-managed network.
@@ -128,6 +162,23 @@ pub struct ContainerInspection {
     #[allow(dead_code)]
     pub id: String,
     pub state: ContainerState,
+    /// Container image name.
+    #[allow(dead_code)]
+    pub image: String,
+    /// Environment variables set on the container.
+    #[allow(dead_code)]
+    pub env: Vec<String>,
+    /// Network name the container is attached to.
+    #[allow(dead_code)]
+    pub network_name: Option<String>,
+    /// Port mappings for the container.
+    #[allow(dead_code)]
+    pub ports: Vec<PortInfo>,
+    /// ISO 8601 timestamp when the container was started.
+    #[allow(dead_code)]
+    pub started_at: Option<String>,
+    /// Container labels.
+    pub labels: HashMap<String, String>,
 }
 
 /// Container state from inspection.
@@ -407,6 +458,23 @@ impl ContainerRuntime for ContainerClient {
             .into_iter()
             .filter_map(|c| {
                 let labels = c.labels.as_ref()?;
+                let ports = c
+                    .ports
+                    .as_ref()
+                    .map(|ports| {
+                        ports
+                            .iter()
+                            .map(|p| PortInfo {
+                                host_port: p.public_port,
+                                container_port: p.private_port,
+                                protocol: p.typ.as_ref().map_or_else(
+                                    || "tcp".to_string(),
+                                    |t| format!("{t:?}").to_lowercase(),
+                                ),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 Some(ContainerInfo {
                     id: c.id?,
                     name: c
@@ -418,6 +486,9 @@ impl ContainerRuntime for ContainerClient {
                     image: c.image.unwrap_or_default(),
                     family: labels.get("egret.task").cloned().unwrap_or_default(),
                     state: c.state.unwrap_or_default(),
+                    health_status: None, // populated via inspect when needed
+                    ports,
+                    started_at: None, // populated via inspect when needed
                 })
             })
             .collect())
@@ -426,6 +497,17 @@ impl ContainerRuntime for ContainerClient {
     async fn inspect_container(&self, id: &str) -> Result<ContainerInspection, ContainerError> {
         let resp = self.docker.inspect_container(id, None).await?;
         let state = resp.state.as_ref();
+        let config = resp.config.as_ref();
+
+        let ports = extract_inspect_ports(&resp);
+        let started_at = state
+            .and_then(|s| s.started_at.clone())
+            .filter(|s| !s.is_empty() && s != "0001-01-01T00:00:00Z");
+        let network_name = resp
+            .network_settings
+            .as_ref()
+            .and_then(|ns| ns.networks.as_ref())
+            .and_then(|nets| nets.keys().next().cloned());
 
         Ok(ContainerInspection {
             id: resp.id.unwrap_or_default(),
@@ -441,6 +523,12 @@ impl ContainerRuntime for ContainerClient {
                     .and_then(|h| h.status.as_ref())
                     .map(|s| format!("{s:?}").to_lowercase()),
             },
+            image: config.and_then(|c| c.image.clone()).unwrap_or_default(),
+            env: config.and_then(|c| c.env.clone()).unwrap_or_default(),
+            network_name,
+            ports,
+            started_at,
+            labels: config.and_then(|c| c.labels.clone()).unwrap_or_default(),
         })
     }
 
@@ -456,6 +544,102 @@ impl ContainerRuntime for ContainerClient {
             status_code: response.status_code,
         })
     }
+
+    async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError> {
+        let stats = self
+            .docker
+            .stats(
+                id,
+                Some(StatsOptions {
+                    stream: false,
+                    one_shot: true,
+                }),
+            )
+            .next()
+            .await
+            .ok_or(ContainerError::RuntimeNotRunning)?
+            .map_err(ContainerError::from)?;
+
+        let cpu_percent = calculate_cpu_percent(&stats);
+        let memory_usage = stats.memory_stats.usage.unwrap_or(0);
+        let memory_limit = stats.memory_stats.limit.unwrap_or(0);
+
+        let (net_rx, net_tx) = stats.networks.as_ref().map_or((0, 0), |nets| {
+            nets.values().fold((0u64, 0u64), |(rx, tx), n| {
+                (rx + n.rx_bytes, tx + n.tx_bytes)
+            })
+        });
+
+        let (block_read, block_write) = stats
+            .blkio_stats
+            .io_service_bytes_recursive
+            .as_ref()
+            .map_or((0, 0), |entries| {
+                entries
+                    .iter()
+                    .fold((0u64, 0u64), |(r, w), e| match e.op.as_str() {
+                        "read" | "Read" => (r + e.value, w),
+                        "write" | "Write" => (r, w + e.value),
+                        _ => (r, w),
+                    })
+            });
+
+        Ok(ContainerStats {
+            cpu_percent,
+            memory_usage,
+            memory_limit,
+            net_rx_bytes: net_rx,
+            net_tx_bytes: net_tx,
+            block_read_bytes: block_read,
+            block_write_bytes: block_write,
+        })
+    }
+}
+
+/// Calculate CPU usage percentage from a Docker stats snapshot.
+#[cfg(not(tarpaulin_include))]
+#[allow(clippy::cast_precision_loss, dead_code)]
+fn calculate_cpu_percent(stats: &bollard::container::Stats) -> f64 {
+    let cpu_delta = stats.cpu_stats.cpu_usage.total_usage as f64
+        - stats.precpu_stats.cpu_usage.total_usage as f64;
+    let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0) as f64
+        - stats.precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
+    let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
+
+    if system_delta > 0.0 && cpu_delta >= 0.0 {
+        (cpu_delta / system_delta) * num_cpus * 100.0
+    } else {
+        0.0
+    }
+}
+
+/// Extract port mappings from a container inspection response.
+#[cfg(not(tarpaulin_include))]
+fn extract_inspect_ports(resp: &bollard::models::ContainerInspectResponse) -> Vec<PortInfo> {
+    resp.network_settings
+        .as_ref()
+        .and_then(|ns| ns.ports.as_ref())
+        .map(|ports| {
+            ports
+                .iter()
+                .filter_map(|(key, bindings)| {
+                    let parts: Vec<&str> = key.split('/').collect();
+                    let container_port = parts.first()?.parse::<u16>().ok()?;
+                    let protocol = parts.get(1).unwrap_or(&"tcp").to_string();
+                    let host_port = bindings
+                        .as_ref()
+                        .and_then(|b| b.first())
+                        .and_then(|b| b.host_port.as_ref())
+                        .and_then(|p| p.parse::<u16>().ok());
+                    Some(PortInfo {
+                        host_port,
+                        container_port,
+                        protocol,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Build a bollard container `Config` from an Egret `ContainerConfig`.
@@ -567,6 +751,7 @@ pub mod test_support {
         pub list_networks_results: Mutex<VecDeque<Result<Vec<NetworkInfo>, ContainerError>>>,
         pub inspect_container_results: Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
         pub wait_container_results: Mutex<VecDeque<Result<WaitResult, ContainerError>>>,
+        pub stats_container_results: Mutex<VecDeque<Result<ContainerStats, ContainerError>>>,
     }
 
     impl MockContainerClient {
@@ -582,6 +767,7 @@ pub mod test_support {
                 list_networks_results: Mutex::new(VecDeque::new()),
                 inspect_container_results: Mutex::new(VecDeque::new()),
                 wait_container_results: Mutex::new(VecDeque::new()),
+                stats_container_results: Mutex::new(VecDeque::new()),
             }
         }
     }
@@ -649,6 +835,10 @@ pub mod test_support {
 
         async fn wait_container(&self, _id: &str) -> Result<WaitResult, ContainerError> {
             pop_result(&self.wait_container_results)
+        }
+
+        async fn stats_container(&self, _id: &str) -> Result<ContainerStats, ContainerError> {
+            pop_result(&self.stats_container_results)
         }
     }
 }

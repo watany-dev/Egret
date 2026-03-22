@@ -1,9 +1,12 @@
 //! CLI command definitions and argument parsing.
 
+pub mod history;
 pub mod init;
+pub mod inspect;
 pub mod logs;
 pub mod ps;
 pub mod run;
+pub mod stats;
 pub mod stop;
 pub mod validate;
 pub mod version;
@@ -38,8 +41,33 @@ pub enum Command {
     Init(InitArgs),
     /// Validate task definition and related files
     Validate(ValidateArgs),
+    /// Inspect a running task's configuration
+    Inspect(InspectArgs),
+    /// Show live resource usage statistics
+    Stats(StatsArgs),
+    /// Show execution history
+    History(HistoryArgs),
     /// Show version information
     Version,
+}
+
+#[derive(Parser)]
+pub struct HistoryArgs {
+    /// Clear all history
+    #[arg(long)]
+    pub clear: bool,
+}
+
+#[derive(Parser)]
+pub struct InspectArgs {
+    /// Task family name to inspect
+    pub family: String,
+}
+
+#[derive(Parser)]
+pub struct StatsArgs {
+    /// Filter by task family name
+    pub family: Option<String>,
 }
 
 #[derive(Parser)]
@@ -93,6 +121,10 @@ pub struct RunArgs {
     /// Validate and display configuration without starting containers
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Output lifecycle events as NDJSON to stderr
+    #[arg(long)]
+    pub events: bool,
 }
 
 #[derive(Parser)]
@@ -109,6 +141,20 @@ pub struct StopArgs {
 pub struct PsArgs {
     /// Filter by task family name
     pub task: Option<String>,
+
+    /// Output format: table (default), json
+    #[arg(short, long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+/// Output format for the `ps` command.
+#[derive(Clone, Default, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// Default table view
+    #[default]
+    Table,
+    /// JSON output
+    Json,
 }
 
 #[derive(Parser)]
@@ -142,6 +188,29 @@ mod tests {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
                 assert!(args.r#override.is_none());
                 assert!(args.secrets.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_events() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--events"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.events);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_without_events() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(!args.events);
             }
             _ => panic!("expected Run command"),
         }
@@ -228,6 +297,7 @@ mod tests {
         match cli.command {
             Command::Ps(args) => {
                 assert!(args.task.is_none());
+                assert!(matches!(args.output, OutputFormat::Table));
             }
             _ => panic!("expected Ps command"),
         }
@@ -239,6 +309,17 @@ mod tests {
         match cli.command {
             Command::Ps(args) => {
                 assert_eq!(args.task.as_deref(), Some("my-app"));
+            }
+            _ => panic!("expected Ps command"),
+        }
+    }
+
+    #[test]
+    fn parse_ps_with_json_output() {
+        let cli = Cli::try_parse_from(["egret", "ps", "--output", "json"]).expect("should parse");
+        match cli.command {
+            Command::Ps(args) => {
+                assert!(matches!(args.output, OutputFormat::Json));
             }
             _ => panic!("expected Ps command"),
         }
@@ -335,6 +416,61 @@ mod tests {
                 );
             }
             _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_inspect_command() {
+        let cli = Cli::try_parse_from(["egret", "inspect", "my-app"]).expect("should parse");
+        match cli.command {
+            Command::Inspect(args) => {
+                assert_eq!(args.family, "my-app");
+            }
+            _ => panic!("expected Inspect command"),
+        }
+    }
+
+    #[test]
+    fn parse_stats_command_defaults() {
+        let cli = Cli::try_parse_from(["egret", "stats"]).expect("should parse");
+        match cli.command {
+            Command::Stats(args) => {
+                assert!(args.family.is_none());
+            }
+            _ => panic!("expected Stats command"),
+        }
+    }
+
+    #[test]
+    fn parse_stats_with_family() {
+        let cli = Cli::try_parse_from(["egret", "stats", "my-app"]).expect("should parse");
+        match cli.command {
+            Command::Stats(args) => {
+                assert_eq!(args.family.as_deref(), Some("my-app"));
+            }
+            _ => panic!("expected Stats command"),
+        }
+    }
+
+    #[test]
+    fn parse_history_command() {
+        let cli = Cli::try_parse_from(["egret", "history"]).expect("should parse");
+        match cli.command {
+            Command::History(args) => {
+                assert!(!args.clear);
+            }
+            _ => panic!("expected History command"),
+        }
+    }
+
+    #[test]
+    fn parse_history_with_clear() {
+        let cli = Cli::try_parse_from(["egret", "history", "--clear"]).expect("should parse");
+        match cli.command {
+            Command::History(args) => {
+                assert!(args.clear);
+            }
+            _ => panic!("expected History command"),
         }
     }
 

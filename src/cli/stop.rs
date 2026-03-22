@@ -70,6 +70,9 @@ mod tests {
             image: "alpine:latest".to_string(),
             family: "test".to_string(),
             state: "running".to_string(),
+            health_status: None,
+            ports: vec![],
+            started_at: None,
         }
     }
 

@@ -7,6 +7,8 @@
 mod cli;
 mod container;
 mod credentials;
+mod events;
+mod history;
 mod metadata;
 mod orchestrator;
 mod overrides;
@@ -32,6 +34,9 @@ async fn main() -> Result<()> {
         cli::Command::Logs(args) => cli::logs::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Init(args) => cli::init::execute(&args)?,
         cli::Command::Validate(args) => cli::validate::execute(&args)?,
+        cli::Command::Inspect(args) => cli::inspect::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Stats(args) => cli::stats::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::History(args) => cli::history::execute(&args)?,
         cli::Command::Version => cli::version::execute(),
     }
 
