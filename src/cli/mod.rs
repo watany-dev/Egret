@@ -1,6 +1,7 @@
 //! CLI command definitions and argument parsing.
 
 pub mod init;
+pub mod inspect;
 pub mod logs;
 pub mod ps;
 pub mod run;
@@ -38,8 +39,16 @@ pub enum Command {
     Init(InitArgs),
     /// Validate task definition and related files
     Validate(ValidateArgs),
+    /// Inspect a running task's configuration
+    Inspect(InspectArgs),
     /// Show version information
     Version,
+}
+
+#[derive(Parser)]
+pub struct InspectArgs {
+    /// Task family name to inspect
+    pub family: String,
 }
 
 #[derive(Parser)]
@@ -376,6 +385,18 @@ mod tests {
                 );
             }
             _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_inspect_command() {
+        let cli =
+            Cli::try_parse_from(["egret", "inspect", "my-app"]).expect("should parse");
+        match cli.command {
+            Command::Inspect(args) => {
+                assert_eq!(args.family, "my-app");
+            }
+            _ => panic!("expected Inspect command"),
         }
     }
 

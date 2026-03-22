@@ -177,6 +177,8 @@ pub struct ContainerInspection {
     /// ISO 8601 timestamp when the container was started.
     #[allow(dead_code)]
     pub started_at: Option<String>,
+    /// Container labels.
+    pub labels: HashMap<String, String>,
 }
 
 /// Container state from inspection.
@@ -530,6 +532,9 @@ impl ContainerRuntime for ContainerClient {
             network_name,
             ports,
             started_at,
+            labels: config
+                .and_then(|c| c.labels.clone())
+                .unwrap_or_default(),
         })
     }
 

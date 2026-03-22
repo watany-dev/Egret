@@ -311,11 +311,27 @@ fn build_container_config(
     volumes: &[Volume],
     auth_token: Option<&str>,
 ) -> ContainerConfig {
-    let labels = HashMap::from([
+    let mut labels = HashMap::from([
         ("egret.managed".into(), "true".into()),
         ("egret.task".into(), family.into()),
         ("egret.container".into(), def.name.clone()),
     ]);
+
+    // Store secret names for inspect masking
+    if !def.secrets.is_empty() {
+        let secret_names: Vec<String> = def.secrets.iter().map(|s| s.name.clone()).collect();
+        labels.insert("egret.secrets".into(), secret_names.join(","));
+    }
+
+    // Store dependency info for ps display
+    if !def.depends_on.is_empty() {
+        let deps: Vec<String> = def
+            .depends_on
+            .iter()
+            .map(|d| format!("{}:{:?}", d.container_name, d.condition))
+            .collect();
+        labels.insert("egret.depends_on".into(), deps.join(","));
+    }
 
     let mut env: Vec<String> = def
         .environment

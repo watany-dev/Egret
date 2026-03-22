@@ -762,6 +762,7 @@ mod tests {
             network_name: None,
             ports: vec![],
             started_at: None,
+            labels: HashMap::new(),
         }
     }
 
