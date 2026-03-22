@@ -523,18 +523,12 @@ impl ContainerRuntime for ContainerClient {
                     .and_then(|h| h.status.as_ref())
                     .map(|s| format!("{s:?}").to_lowercase()),
             },
-            image: config
-                .and_then(|c| c.image.clone())
-                .unwrap_or_default(),
-            env: config
-                .and_then(|c| c.env.clone())
-                .unwrap_or_default(),
+            image: config.and_then(|c| c.image.clone()).unwrap_or_default(),
+            env: config.and_then(|c| c.env.clone()).unwrap_or_default(),
             network_name,
             ports,
             started_at,
-            labels: config
-                .and_then(|c| c.labels.clone())
-                .unwrap_or_default(),
+            labels: config.and_then(|c| c.labels.clone()).unwrap_or_default(),
         })
     }
 
@@ -581,13 +575,13 @@ impl ContainerRuntime for ContainerClient {
             .io_service_bytes_recursive
             .as_ref()
             .map_or((0, 0), |entries| {
-                entries.iter().fold((0u64, 0u64), |(r, w), e| {
-                    match e.op.as_str() {
+                entries
+                    .iter()
+                    .fold((0u64, 0u64), |(r, w), e| match e.op.as_str() {
                         "read" | "Read" => (r + e.value, w),
                         "write" | "Write" => (r, w + e.value),
                         _ => (r, w),
-                    }
-                })
+                    })
             });
 
         Ok(ContainerStats {
@@ -610,10 +604,7 @@ fn calculate_cpu_percent(stats: &bollard::container::Stats) -> f64 {
         - stats.precpu_stats.cpu_usage.total_usage as f64;
     let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0) as f64
         - stats.precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
-    let num_cpus = stats
-        .cpu_stats
-        .online_cpus
-        .unwrap_or(1) as f64;
+    let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
 
     if system_delta > 0.0 && cpu_delta >= 0.0 {
         (cpu_delta / system_delta) * num_cpus * 100.0
@@ -624,9 +615,7 @@ fn calculate_cpu_percent(stats: &bollard::container::Stats) -> f64 {
 
 /// Extract port mappings from a container inspection response.
 #[cfg(not(tarpaulin_include))]
-fn extract_inspect_ports(
-    resp: &bollard::models::ContainerInspectResponse,
-) -> Vec<PortInfo> {
+fn extract_inspect_ports(resp: &bollard::models::ContainerInspectResponse) -> Vec<PortInfo> {
     resp.network_settings
         .as_ref()
         .and_then(|ns| ns.ports.as_ref())

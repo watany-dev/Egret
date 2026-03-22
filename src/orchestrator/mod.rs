@@ -289,10 +289,7 @@ pub async fn orchestrate_startup(
         // Start all containers in this layer
         for name in layer {
             let spec = specs_by_name[name];
-            let id = create_and_start_container(
-                client, spec, name, event_sink, &started,
-            )
-            .await?;
+            let id = create_and_start_container(client, spec, name, event_sink, &started).await?;
             started.push((id.clone(), name.clone()));
             id_by_name.insert(name.clone(), id);
         }
@@ -851,7 +848,9 @@ mod tests {
         }
 
         let specs = vec![make_spec("a", &[]), make_spec("b", &[])];
-        let result = orchestrate_startup(&mock, specs, &NullEventSink).await.unwrap();
+        let result = orchestrate_startup(&mock, specs, &NullEventSink)
+            .await
+            .unwrap();
         assert_eq!(result.started.len(), 2);
     }
 
@@ -874,7 +873,9 @@ mod tests {
             make_spec("a", &[]),
             make_spec("b", &[("a", DependencyCondition::Start)]),
         ];
-        let result = orchestrate_startup(&mock, specs, &NullEventSink).await.unwrap();
+        let result = orchestrate_startup(&mock, specs, &NullEventSink)
+            .await
+            .unwrap();
         assert_eq!(result.started.len(), 2);
         assert_eq!(result.started[0].1, "a");
         assert_eq!(result.started[1].1, "b");
@@ -927,7 +928,9 @@ mod tests {
             make_spec("b", &[("a", DependencyCondition::Start)]),
         ];
         let mock = MockContainerClient::new();
-        let err = orchestrate_startup(&mock, specs, &NullEventSink).await.unwrap_err();
+        let err = orchestrate_startup(&mock, specs, &NullEventSink)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err.1, OrchestratorError::CyclicDependency(_)),
             "unexpected: {:?}",

@@ -7,6 +7,7 @@
 mod cli;
 mod container;
 mod credentials;
+mod events;
 mod history;
 mod metadata;
 mod orchestrator;

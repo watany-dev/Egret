@@ -129,6 +129,10 @@ pub struct RunArgs {
     /// Validate and display configuration without starting containers
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Output lifecycle events as NDJSON to stderr
+    #[arg(long)]
+    pub events: bool,
 }
 
 #[derive(Parser)]
@@ -194,6 +198,29 @@ mod tests {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
                 assert!(args.r#override.is_none());
                 assert!(args.secrets.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_events() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--events"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.events);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_without_events() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(!args.events);
             }
             _ => panic!("expected Run command"),
         }
@@ -299,8 +326,7 @@ mod tests {
 
     #[test]
     fn parse_ps_with_json_output() {
-        let cli =
-            Cli::try_parse_from(["egret", "ps", "--output", "json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["egret", "ps", "--output", "json"]).expect("should parse");
         match cli.command {
             Command::Ps(args) => {
                 assert!(matches!(args.output, OutputFormat::Json));
@@ -311,8 +337,7 @@ mod tests {
 
     #[test]
     fn parse_ps_with_wide_output() {
-        let cli =
-            Cli::try_parse_from(["egret", "ps", "--output", "wide"]).expect("should parse");
+        let cli = Cli::try_parse_from(["egret", "ps", "--output", "wide"]).expect("should parse");
         match cli.command {
             Command::Ps(args) => {
                 assert!(matches!(args.output, OutputFormat::Wide));
@@ -417,8 +442,7 @@ mod tests {
 
     #[test]
     fn parse_inspect_command() {
-        let cli =
-            Cli::try_parse_from(["egret", "inspect", "my-app"]).expect("should parse");
+        let cli = Cli::try_parse_from(["egret", "inspect", "my-app"]).expect("should parse");
         match cli.command {
             Command::Inspect(args) => {
                 assert_eq!(args.family, "my-app");
@@ -477,8 +501,7 @@ mod tests {
 
     #[test]
     fn parse_history_with_clear() {
-        let cli =
-            Cli::try_parse_from(["egret", "history", "--clear"]).expect("should parse");
+        let cli = Cli::try_parse_from(["egret", "history", "--clear"]).expect("should parse");
         match cli.command {
             Command::History(args) => {
                 assert!(args.clear);

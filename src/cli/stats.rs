@@ -56,7 +56,11 @@ pub fn format_stats_table(data: &[(&ContainerInfo, Option<ContainerStats>)]) -> 
         .iter()
         .map(|(_, s)| {
             format_stat(s.as_ref(), |s| {
-                format!("{} / {}", format_bytes(s.memory_usage), format_bytes(s.memory_limit))
+                format!(
+                    "{} / {}",
+                    format_bytes(s.memory_usage),
+                    format_bytes(s.memory_limit)
+                )
             })
         })
         .collect();
@@ -64,7 +68,11 @@ pub fn format_stats_table(data: &[(&ContainerInfo, Option<ContainerStats>)]) -> 
         .iter()
         .map(|(_, s)| {
             format_stat(s.as_ref(), |s| {
-                format!("{} / {}", format_bytes(s.net_rx_bytes), format_bytes(s.net_tx_bytes))
+                format!(
+                    "{} / {}",
+                    format_bytes(s.net_rx_bytes),
+                    format_bytes(s.net_tx_bytes)
+                )
             })
         })
         .collect();
@@ -72,7 +80,11 @@ pub fn format_stats_table(data: &[(&ContainerInfo, Option<ContainerStats>)]) -> 
         .iter()
         .map(|(_, s)| {
             format_stat(s.as_ref(), |s| {
-                format!("{} / {}", format_bytes(s.block_read_bytes), format_bytes(s.block_write_bytes))
+                format!(
+                    "{} / {}",
+                    format_bytes(s.block_read_bytes),
+                    format_bytes(s.block_write_bytes)
+                )
             })
         })
         .collect();
@@ -133,11 +145,11 @@ mod tests {
     fn sample_stats() -> ContainerStats {
         ContainerStats {
             cpu_percent: 12.5,
-            memory_usage: 52_428_800,  // 50 MiB
-            memory_limit: 536_870_912, // 512 MiB
-            net_rx_bytes: 1_048_576,   // 1 MiB
-            net_tx_bytes: 524_288,     // 512 KiB
-            block_read_bytes: 2_097_152, // 2 MiB
+            memory_usage: 52_428_800,     // 50 MiB
+            memory_limit: 536_870_912,    // 512 MiB
+            net_rx_bytes: 1_048_576,      // 1 MiB
+            net_tx_bytes: 524_288,        // 512 KiB
+            block_read_bytes: 2_097_152,  // 2 MiB
             block_write_bytes: 1_048_576, // 1 MiB
         }
     }
@@ -162,9 +174,7 @@ mod tests {
     #[tokio::test]
     async fn stats_with_containers() {
         let mock = MockContainerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                container_info("web"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info("web")])])),
             stats_container_results: Mutex::new(VecDeque::from([Ok(sample_stats())])),
             ..MockContainerClient::new()
         };
@@ -182,9 +192,7 @@ mod tests {
     #[tokio::test]
     async fn stats_with_family_filter() {
         let mock = MockContainerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                container_info("web"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info("web")])])),
             stats_container_results: Mutex::new(VecDeque::from([Ok(sample_stats())])),
             ..MockContainerClient::new()
         };
@@ -202,9 +210,7 @@ mod tests {
     #[tokio::test]
     async fn stats_container_error_shows_na() {
         let mock = MockContainerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                container_info("web"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info("web")])])),
             // stats_container_results is empty, so it returns RuntimeNotRunning
             ..MockContainerClient::new()
         };

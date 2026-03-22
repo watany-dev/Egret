@@ -10,6 +10,7 @@ use crate::container::{
     ContainerClient, ContainerConfig, ContainerRuntime, HealthCheckConfig, PortMappingConfig,
 };
 use crate::credentials;
+use crate::events::{EventSink, NullEventSink};
 use crate::metadata::{
     self, ContainerMetadata, MetadataServer, ServerState, SharedState, build_container_metadata,
     build_task_metadata,
@@ -86,8 +87,19 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     } else {
         None
     };
-    let (network_name, containers) =
-        run_task(&*client, &task_def, metadata_port, auth_token.as_deref()).await?;
+    let event_sink: Box<dyn EventSink> = if args.events {
+        Box::new(crate::events::NdjsonEventSink)
+    } else {
+        Box::new(NullEventSink)
+    };
+    let (network_name, containers) = run_task(
+        &*client,
+        &task_def,
+        metadata_port,
+        auth_token.as_deref(),
+        &*event_sink,
+    )
+    .await?;
 
     // Update container IDs in metadata server state
     if let Some(state) = &metadata_state {
@@ -117,6 +129,7 @@ pub async fn run_task(
     task_def: &TaskDefinition,
     metadata_port: Option<u16>,
     auth_token: Option<&str>,
+    event_sink: &dyn EventSink,
 ) -> Result<(String, Vec<(String, String)>)> {
     let network_name = client.create_network(&task_def.family).await?;
     tracing::info!(network = %network_name, "Created network");
@@ -143,7 +156,7 @@ pub async fn run_task(
         })
         .collect();
 
-    match orchestrate_startup(client, specs).await {
+    match orchestrate_startup(client, specs, event_sink).await {
         Ok(result) => Ok((network_name, result.started)),
         Err((partial, err)) => {
             cleanup(client, &partial.started, &network_name).await;
@@ -562,7 +575,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let (network, containers) = run_task(&mock, &task_def, None, None)
+        let (network, containers) = run_task(&mock, &task_def, None, None, &NullEventSink)
             .await
             .expect("should succeed");
 
@@ -585,7 +598,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let (_, containers) = run_task(&mock, &task_def, None, None)
+        let (_, containers) = run_task(&mock, &task_def, None, None, &NullEventSink)
             .await
             .expect("should succeed");
 
@@ -604,7 +617,7 @@ mod tests {
         };
 
         let task_def = single_container_taskdef();
-        let result = run_task(&mock, &task_def, None, None).await;
+        let result = run_task(&mock, &task_def, None, None, &NullEventSink).await;
         assert!(result.is_err());
     }
 
@@ -621,7 +634,7 @@ mod tests {
         };
 
         let task_def = two_container_taskdef();
-        let result = run_task(&mock, &task_def, None, None).await;
+        let result = run_task(&mock, &task_def, None, None, &NullEventSink).await;
         assert!(result.is_err());
     }
 
@@ -1045,7 +1058,7 @@ mod tests {
             ],
         };
 
-        let (network, containers) = run_task(&mock, &task_def, None, None)
+        let (network, containers) = run_task(&mock, &task_def, None, None, &NullEventSink)
             .await
             .expect("should succeed");
 

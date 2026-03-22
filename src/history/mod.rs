@@ -48,8 +48,7 @@ pub fn append(path: &Path, entry: &HistoryEntry) -> Result<()> {
     }
     let mut entries = load(path).unwrap_or_default();
     entries.push(entry.clone());
-    let json = serde_json::to_string_pretty(&entries)
-        .context("Failed to serialize history")?;
+    let json = serde_json::to_string_pretty(&entries).context("Failed to serialize history")?;
     let mut file = std::fs::File::create(path)
         .with_context(|| format!("Failed to write history file: {}", path.display()))?;
     file.write_all(json.as_bytes())
