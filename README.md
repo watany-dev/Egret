@@ -35,6 +35,18 @@ egret ps
 # Show logs for a container
 egret logs app
 
+# Inspect running task details
+egret inspect my-app
+
+# Show resource usage (CPU, memory, I/O)
+egret stats
+
+# Show execution history
+egret history
+
+# Run with structured lifecycle events (NDJSON to stderr)
+egret run -f task-definition.json --events
+
 # Stop a specific task
 egret stop <family-name>
 
@@ -80,6 +92,7 @@ egret run -f path/to/task-definition.json
 | `-s, --secrets` | — | Path to local secrets mapping file (`secrets.local.json`) |
 | `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
 | `--dry-run` | — | Show resolved configuration without starting containers |
+| `--events` | — | Emit structured lifecycle events (NDJSON) to stderr |
 | `--host` | `CONTAINER_HOST` | Container runtime socket URL |
 
 Press `Ctrl+C` to gracefully stop all containers and clean up resources.
@@ -134,12 +147,47 @@ Creates: `task-definition.json`, `egret-override.json`, `secrets.local.json`. Ex
 
 ### `egret ps`
 
-Lists running Egret-managed tasks.
+Lists running Egret-managed tasks with status, health, ports, and uptime.
 
 ```bash
 egret ps
 egret ps my-app
+egret ps --output json
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--output` | Output format: `table` (default), `json` |
+
+### `egret inspect`
+
+Shows detailed configuration for a running task (container IDs, images, environment variables with secrets masked).
+
+```bash
+egret inspect my-app
+```
+
+### `egret stats`
+
+Shows resource usage snapshot (CPU%, memory, network I/O, block I/O) for running containers.
+
+```bash
+egret stats
+egret stats my-app
+```
+
+### `egret history`
+
+Displays execution history stored in `~/.egret/history.json`.
+
+```bash
+egret history
+egret history --clear
+```
+
+| Flag | Description |
+|------|-------------|
+| `--clear` | Delete all execution history |
 
 ### `egret logs`
 
@@ -298,14 +346,16 @@ The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and
 ```
 src/
 ├── main.rs              # Async entry point (clap + tokio)
-├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, version
+├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, history, version
 ├── taskdef/             # ECS task definition JSON parser & validation diagnostics
 ├── container/           # OCI container runtime client (bollard, Docker/Podman)
 ├── overrides/           # Local override configuration
 ├── secrets/             # Secrets local resolver
 ├── orchestrator/        # Container lifecycle & dependsOn DAG
 ├── metadata/            # ECS metadata endpoint mock (axum HTTP server)
-└── credentials/         # AWS credential provider (aws-config)
+├── credentials/         # AWS credential provider (aws-config)
+├── events/              # Structured lifecycle event logging (NDJSON)
+└── history/             # Execution history persistence
 ```
 
 ### Key Dependencies
@@ -348,7 +398,7 @@ make clean      # cargo clean
 - **Phase 4**: dependsOn DAG + health checks ✅
 - **Phase 5**: Volumes + log coloring + UX improvements ✅
 - **Phase 6**: Validation + init + dry-run ✅
-- **Phase 7**: Observability + diagnostics
+- **Phase 7**: Observability + diagnostics ✅
 - **Phase 8**: Workflow acceleration
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for details.

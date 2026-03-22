@@ -42,7 +42,7 @@ Display: ID, Image, Status, Health, Ports, Network, Environment
     ▼
 stdout
 
-egret stats [family] [--no-stream] [--interval N]
+egret stats [family]
     │
     ▼
 list_containers() → stats_container() per container
@@ -51,7 +51,7 @@ list_containers() → stats_container() per container
 format_stats_table()
     │  NAME, CPU%, MEM USAGE/LIMIT, NET I/O, BLOCK I/O
     ▼
-stdout (single or streaming)
+stdout (single snapshot)
 
 egret history [--clear]
     │
@@ -158,6 +158,16 @@ pub trait EventSink: Send + Sync {
 }
 ```
 
+### オーケストレータ層（`src/orchestrator/mod.rs`）
+
+```rust
+/// イベント発行コンテキスト。event_sink と family をバンドルして引数を削減する。
+pub struct EventContext<'a> {
+    pub event_sink: &'a dyn EventSink,
+    pub family: &'a str,
+}
+```
+
 ### 履歴層（`src/history/mod.rs`）
 
 ```rust
@@ -182,7 +192,7 @@ pub enum OutputFormat {
 }
 
 pub struct InspectArgs { pub family: String }
-pub struct StatsArgs { pub family: Option<String>, pub interval: u64, pub no_stream: bool }
+pub struct StatsArgs { pub family: Option<String> }
 pub struct HistoryArgs { pub clear: bool }
 
 // RunArgs に追加:
@@ -254,10 +264,19 @@ pub events: bool,
 
 ### `src/orchestrator/mod.rs`（変更）
 
+| 関数 / 型 | 変更 |
+|------|------|
+| `EventContext` | 新規構造体。`event_sink: &dyn EventSink` と `family: &str` をバンドル |
+| `orchestrate_startup` | `event_sink: &dyn EventSink` パラメータ追加。Created/Started イベントを発行 |
+| `wait_for_condition` | `ctx: &EventContext` パラメータ追加。Exited イベントを発行（Complete/Success 条件時） |
+| `wait_for_healthy` | `ctx: &EventContext` パラメータ追加。HealthCheckPassed/HealthCheckFailed イベントを発行 |
+| `create_and_start_container` | 新規ヘルパー。コンテナ作成+起動+イベント発行を集約 |
+
+### `src/cli/run.rs`（変更）
+
 | 関数 | 変更 |
 |------|------|
-| `orchestrate_startup` | `event_sink: &dyn EventSink` パラメータ追加。Created/Started イベントを発行 |
-| `create_and_start_container` | 新規ヘルパー。コンテナ作成+起動+イベント発行を集約 |
+| `cleanup` | `event_sink: &dyn EventSink`, `family: &str` パラメータ追加。CleanupCompleted イベントを発行 |
 
 ---
 
@@ -281,8 +300,7 @@ pub events: bool,
 
 1. `list_containers()` → オプショナル family フィルタ
 2. 各コンテナに `stats_container()` → `ContainerStats` 取得（失敗時は N/A）
-3. `format_stats_table()` でテーブル表示
-4. ストリーミングモード: `--interval` 秒ごとにループ
+3. `format_stats_table()` でテーブル表示（単発スナップショット）
 
 ### `egret history`
 
@@ -295,7 +313,13 @@ pub events: bool,
 1. `--events` 指定時: `NdjsonEventSink` を構築
 2. 未指定時: `NullEventSink` を構築
 3. `orchestrate_startup()` に `&dyn EventSink` を渡す
-4. コンテナ作成時に `Created`、起動時に `Started` イベントを emit
+4. 全 6 種のイベントを発行:
+   - `Created` — コンテナ作成時（`create_and_start_container`）
+   - `Started` — コンテナ起動時（`create_and_start_container`）
+   - `HealthCheckPassed` — ヘルスチェック成功時（`wait_for_healthy`）
+   - `HealthCheckFailed` — ヘルスチェック失敗/タイムアウト時（`wait_for_healthy`）
+   - `Exited` — コンテナ終了時（`wait_for_condition` Complete/Success 条件）
+   - `CleanupCompleted` — クリーンアップ完了時（`cleanup`）
 5. NDJSON 形式で stderr に出力
 
 ---

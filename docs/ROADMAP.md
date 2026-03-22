@@ -157,9 +157,9 @@ src/
 - [x] `egret inspect <family>` — 実行中タスクの詳細表示
   - マージ済み実効設定（タスク定義 + オーバーライド + 解決済み Secrets、値は伏字）
   - ネットワーク構成、ポートマッピング、コンテナ ID・イメージ
-- [x] `egret stats [family]` — ライブリソース使用量表示
-  - CPU%、メモリ使用量、ネットワーク I/O、ブロック I/O をリアルタイム更新
-  - bollard の stats stream 利用、`--interval`（デフォルト 2s）、`--no-stream`（単発モード）
+- [x] `egret stats [family]` — リソース使用量表示
+  - CPU%、メモリ使用量、ネットワーク I/O、ブロック I/O をスナップショット表示
+  - bollard の stats one-shot 利用
 - [x] `egret history` — 実行履歴の記録・表示
   - `~/.egret/history.json` に保存（family、開始時刻、所要時間、終了状態、コンテナ数）
   - `egret history --clear` でリセット
