@@ -403,6 +403,36 @@ impl TaskDefinition {
         Ok(())
     }
 
+    /// Maximum length for a container name (ECS specification).
+    const MAX_CONTAINER_NAME_LEN: usize = 255;
+
+    /// Validate that a container name matches ECS naming rules: `[a-zA-Z0-9_-]{1,255}`.
+    fn validate_container_name(name: &str, index: usize) -> Result<(), TaskDefError> {
+        if name.is_empty() {
+            return Err(TaskDefError::Validation(format!(
+                "container name must not be empty at index {index}"
+            )));
+        }
+        if name.len() > Self::MAX_CONTAINER_NAME_LEN {
+            return Err(TaskDefError::Validation(format!(
+                "container name must not exceed {} characters at index {index}, \
+                 got {} characters: '{name}'",
+                Self::MAX_CONTAINER_NAME_LEN,
+                name.len()
+            )));
+        }
+        if let Some(pos) = name.find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-') {
+            // `pos` is a byte offset from `find`, but all valid chars are ASCII (1 byte each),
+            // so byte offset == char index for the first invalid character.
+            let invalid_char = name[pos..].chars().next().unwrap_or('?');
+            return Err(TaskDefError::Validation(format!(
+                "container name contains invalid character '{invalid_char}' at position {pos} \
+                 in '{name}' at index {index} (allowed: a-z, A-Z, 0-9, _, -)"
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate the task definition (fail-fast).
     fn validate(&self) -> Result<(), TaskDefError> {
         if self.family.is_empty() {
@@ -416,11 +446,7 @@ impl TaskDefinition {
             ));
         }
         for (i, container) in self.container_definitions.iter().enumerate() {
-            if container.name.is_empty() {
-                return Err(TaskDefError::Validation(format!(
-                    "container name must not be empty at index {i}"
-                )));
-            }
+            Self::validate_container_name(&container.name, i)?;
             if container.image.is_empty() {
                 return Err(TaskDefError::Validation(format!(
                     "container image must not be empty for container '{}'",
@@ -1277,5 +1303,166 @@ mod tests {
         }"#;
         let result = TaskDefinition::from_json(json);
         assert!(result.is_ok(), "single dot in path should be allowed");
+    }
+
+    // --- Container name validation (VULN-004) ---
+
+    #[test]
+    fn validate_container_name_alphanumeric() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "alpine:latest" }
+            ]
+        }"#;
+        assert!(TaskDefinition::from_json(json).is_ok());
+    }
+
+    #[test]
+    fn validate_container_name_with_hyphen() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "my-app", "image": "alpine:latest" }
+            ]
+        }"#;
+        assert!(TaskDefinition::from_json(json).is_ok());
+    }
+
+    #[test]
+    fn validate_container_name_with_underscore() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "my_app", "image": "alpine:latest" }
+            ]
+        }"#;
+        assert!(TaskDefinition::from_json(json).is_ok());
+    }
+
+    #[test]
+    fn validate_container_name_numeric_start() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "123app", "image": "alpine:latest" }
+            ]
+        }"#;
+        assert!(TaskDefinition::from_json(json).is_ok());
+    }
+
+    #[test]
+    fn validate_container_name_max_length() {
+        let long_name = "a".repeat(255);
+        let json = format!(
+            r#"{{"family": "test", "containerDefinitions": [{{"name": "{long_name}", "image": "alpine:latest"}}]}}"#
+        );
+        assert!(
+            TaskDefinition::from_json(&json).is_ok(),
+            "255-char name should be valid"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_exceeds_max_length() {
+        let long_name = "a".repeat(256);
+        let json = format!(
+            r#"{{"family": "test", "containerDefinitions": [{{"name": "{long_name}", "image": "alpine:latest"}}]}}"#
+        );
+        let err = TaskDefinition::from_json(&json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("must not exceed 255 characters")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_space_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "my app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_dot_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "my.app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_slash_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "my/app", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_unicode_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "アプリ", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_special_chars_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app;rm -rf", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_container_name_path_traversal_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "../escape", "image": "alpine:latest" }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
+            "unexpected error: {err}"
+        );
     }
 }
