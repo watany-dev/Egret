@@ -89,11 +89,16 @@ pub fn generate_auth_token() -> String {
 /// Uses the OS-provided CSPRNG via `getrandom` to produce a 128-bit
 /// cryptographically random hex token (32 hex characters).
 pub fn generate_auth_token() -> String {
+    use std::fmt::Write;
+
     let mut buf = [0u8; 16];
     // OS CSPRNG failure is unrecoverable — no fallback possible.
     #[allow(clippy::expect_used)]
     getrandom::fill(&mut buf).expect("OS CSPRNG unavailable");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    buf.iter().fold(String::with_capacity(32), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 ```
 
