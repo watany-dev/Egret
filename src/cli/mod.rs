@@ -12,6 +12,7 @@ pub mod stats;
 pub mod stop;
 pub mod validate;
 pub mod version;
+pub mod watch;
 
 use std::path::PathBuf;
 
@@ -55,6 +56,8 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Compare two task definition files semantically
     Diff(DiffArgs),
+    /// Watch files and auto-restart on changes
+    Watch(WatchArgs),
 }
 
 #[derive(Parser)]
@@ -69,6 +72,44 @@ pub struct DiffArgs {
     pub file1: PathBuf,
     /// Second task definition file
     pub file2: PathBuf,
+    /// Disable colored output
+    #[arg(long)]
+    pub no_color: bool,
+}
+
+#[derive(Parser)]
+pub struct WatchArgs {
+    /// Path to ECS task definition JSON file
+    #[arg(short = 'f', long = "task-definition")]
+    pub task_definition: PathBuf,
+
+    /// Path to local override file
+    #[arg(short, long)]
+    pub r#override: Option<PathBuf>,
+
+    /// Path to local secrets mapping file
+    #[arg(short, long)]
+    pub secrets: Option<PathBuf>,
+
+    /// Profile name for loading convention-based override/secrets files
+    #[arg(short, long)]
+    pub profile: Option<String>,
+
+    /// Disable the ECS metadata/credentials sidecar server
+    #[arg(long)]
+    pub no_metadata: bool,
+
+    /// Output lifecycle events as NDJSON to stderr
+    #[arg(long)]
+    pub events: bool,
+
+    /// Debounce interval in milliseconds
+    #[arg(long, default_value_t = 500)]
+    pub debounce: u64,
+
+    /// Additional paths to watch for changes (repeatable)
+    #[arg(long = "watch-path")]
+    pub watch_paths: Vec<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -509,6 +550,19 @@ mod tests {
             Command::Diff(args) => {
                 assert_eq!(args.file1.to_str(), Some("a.json"));
                 assert_eq!(args.file2.to_str(), Some("b.json"));
+                assert!(!args.no_color);
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn parse_diff_with_no_color() {
+        let cli = Cli::try_parse_from(["egret", "diff", "--no-color", "a.json", "b.json"])
+            .expect("should parse");
+        match cli.command {
+            Command::Diff(args) => {
+                assert!(args.no_color);
             }
             _ => panic!("expected Diff command"),
         }
@@ -652,6 +706,56 @@ mod tests {
                 assert_eq!(args.family, "web-service");
             }
             _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_watch_command() {
+        let cli = Cli::try_parse_from(["egret", "watch", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Watch(args) => {
+                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert_eq!(args.debounce, 500);
+                assert!(args.watch_paths.is_empty());
+                assert!(!args.no_metadata);
+                assert!(!args.events);
+            }
+            _ => panic!("expected Watch command"),
+        }
+    }
+
+    #[test]
+    fn parse_watch_with_debounce() {
+        let cli = Cli::try_parse_from(["egret", "watch", "-f", "task.json", "--debounce", "1000"])
+            .expect("should parse");
+        match cli.command {
+            Command::Watch(args) => {
+                assert_eq!(args.debounce, 1000);
+            }
+            _ => panic!("expected Watch command"),
+        }
+    }
+
+    #[test]
+    fn parse_watch_with_watch_paths() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "watch",
+            "-f",
+            "task.json",
+            "--watch-path",
+            "/app/src",
+            "--watch-path",
+            "/app/config",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Watch(args) => {
+                assert_eq!(args.watch_paths.len(), 2);
+                assert_eq!(args.watch_paths[0].to_str(), Some("/app/src"));
+                assert_eq!(args.watch_paths[1].to_str(), Some("/app/config"));
+            }
+            _ => panic!("expected Watch command"),
         }
     }
 }

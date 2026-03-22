@@ -28,6 +28,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 getrandom = { version = "0.3", features = ["std"] }
 clap_complete = "4"
 toml = "0.8"
+notify = "7"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
