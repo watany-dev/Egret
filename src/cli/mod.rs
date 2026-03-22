@@ -4,6 +4,7 @@ pub mod logs;
 pub mod ps;
 pub mod run;
 pub mod stop;
+pub mod validate;
 pub mod version;
 
 use std::path::PathBuf;
@@ -32,8 +33,25 @@ pub enum Command {
     Ps(PsArgs),
     /// Show logs for a container
     Logs(LogsArgs),
+    /// Validate task definition and related files
+    Validate(ValidateArgs),
     /// Show version information
     Version,
+}
+
+#[derive(Parser)]
+pub struct ValidateArgs {
+    /// Path to ECS task definition JSON file
+    #[arg(short = 'f', long = "task-definition")]
+    pub task_definition: PathBuf,
+
+    /// Path to local override file (optional, validates cross-references)
+    #[arg(short, long)]
+    pub r#override: Option<PathBuf>,
+
+    /// Path to local secrets mapping file (optional)
+    #[arg(short, long)]
+    pub secrets: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -237,6 +255,64 @@ mod tests {
                 assert!(args.follow);
             }
             _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn parse_validate_command() {
+        let cli =
+            Cli::try_parse_from(["egret", "validate", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Validate(args) => {
+                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert!(args.r#override.is_none());
+                assert!(args.secrets.is_none());
+            }
+            _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_validate_with_override() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "validate",
+            "-f",
+            "task.json",
+            "--override",
+            "override.json",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Validate(args) => {
+                assert_eq!(
+                    args.r#override.as_ref().unwrap().to_str(),
+                    Some("override.json")
+                );
+            }
+            _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_validate_with_secrets() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "validate",
+            "-f",
+            "task.json",
+            "--secrets",
+            "secrets.json",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Validate(args) => {
+                assert_eq!(
+                    args.secrets.as_ref().unwrap().to_str(),
+                    Some("secrets.json")
+                );
+            }
+            _ => panic!("expected Validate command"),
         }
     }
 }
