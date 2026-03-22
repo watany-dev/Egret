@@ -200,21 +200,37 @@ pub async fn cleanup(
     tracing::info!(network = %network, "Network removed");
 }
 
+/// ANSI color codes for log multiplexing (12 distinct colors).
+const COLORS: &[&str] = &[
+    "32", "33", "34", "35", "36", "91", "92", "93", "94", "95", "96", "31",
+];
+
+/// Return the ANSI color code for a container at the given index.
+fn container_color(index: usize) -> &'static str {
+    COLORS[index % COLORS.len()]
+}
+
+/// Format a log line with ANSI color-coded container prefix.
+fn format_log_line(name: &str, line: &str, color: &str) -> String {
+    format!("\x1b[{color}m[{name}]\x1b[0m {line}")
+}
+
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 async fn stream_logs_until_signal(client: &Arc<ContainerClient>, containers: &[(String, String)]) {
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
-    for (id, name) in containers {
+    for (i, (id, name)) in containers.iter().enumerate() {
         let client = Arc::clone(client);
         let id = id.clone();
         let name = name.clone();
+        let color = container_color(i).to_string();
 
         handles.push(tokio::spawn(async move {
             let mut stream = client.stream_logs(&id);
             while let Some(result) = stream.next().await {
                 match result {
-                    Ok(line) => println!("[{name}] {line}"),
+                    Ok(line) => println!("{}", format_log_line(&name, &line, &color)),
                     Err(e) => {
                         tracing::warn!(container = %name, error = %e, "Log stream error");
                         break;
@@ -955,5 +971,24 @@ mod tests {
 
         let config = build_container_config("test", &def, "egret-test", None, &volumes);
         assert_eq!(config.binds, vec!["/host/data:/app/data"]);
+    }
+
+    #[test]
+    fn container_color_returns_correct_codes() {
+        assert_eq!(container_color(0), "32"); // Green
+        assert_eq!(container_color(1), "33"); // Yellow
+        assert_eq!(container_color(11), "31"); // Red (last)
+    }
+
+    #[test]
+    fn container_color_wraps_around() {
+        assert_eq!(container_color(12), "32"); // Wraps to Green
+        assert_eq!(container_color(24), "32"); // Wraps again
+    }
+
+    #[test]
+    fn format_log_line_produces_ansi_output() {
+        let result = format_log_line("app", "hello world", "32");
+        assert_eq!(result, "\x1b[32m[app]\x1b[0m hello world");
     }
 }
