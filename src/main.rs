@@ -12,6 +12,7 @@ mod history;
 mod metadata;
 mod orchestrator;
 mod overrides;
+mod profile;
 mod secrets;
 mod taskdef;
 

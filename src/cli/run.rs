@@ -17,6 +17,7 @@ use crate::metadata::{
 };
 use crate::orchestrator::{ContainerSpec, orchestrate_startup};
 use crate::overrides::OverrideConfig;
+use crate::profile;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::{ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume};
 
@@ -24,11 +25,29 @@ use crate::taskdef::{ContainerDefinition, Environment, MountPoint, TaskDefinitio
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout, clippy::too_many_lines)]
 pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
+    // Resolve profile paths
+    let base_dir = args
+        .task_definition
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let config =
+        profile::find_config(base_dir).and_then(|p| profile::EgretConfig::from_file(&p).ok());
+    let effective_profile = args
+        .profile
+        .as_deref()
+        .or_else(|| config.as_ref().and_then(|c| c.default_profile.as_deref()));
+    let resolved = profile::resolve(
+        base_dir,
+        effective_profile,
+        args.r#override.as_deref(),
+        args.secrets.as_deref(),
+    );
+
     let mut task_def = TaskDefinition::from_file(&args.task_definition)?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
 
     // Apply overrides if provided
-    if let Some(override_path) = &args.r#override {
+    if let Some(override_path) = &resolved.override_path {
         let override_config = OverrideConfig::from_file(override_path)?;
         override_config.apply(&mut task_def);
         tracing::info!("Applied overrides from {}", override_path.display());
@@ -40,7 +59,7 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         .iter()
         .any(|c| !c.secrets.is_empty());
 
-    if let Some(secrets_path) = &args.secrets {
+    if let Some(secrets_path) = &resolved.secrets_path {
         let secrets_resolver = SecretsResolver::from_file(secrets_path)?;
         for container in &mut task_def.container_definitions {
             let secret_env_vars = secrets_resolver.resolve(&container.secrets)?;
