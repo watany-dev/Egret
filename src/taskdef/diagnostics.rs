@@ -286,7 +286,7 @@ fn check_depends_on(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
 
 /// Validate secret ARN format.
 ///
-/// Expects ARNs to start with `arn:aws:secretsmanager:` and have at least 6 colon-separated segments.
+/// Expects ARNs to start with `arn:aws:secretsmanager:` and have at least 7 colon-separated segments.
 fn check_secret_arn_format(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
     let mut diagnostics = Vec::new();
 
