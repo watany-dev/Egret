@@ -1,5 +1,6 @@
 //! CLI command definitions and argument parsing.
 
+pub mod init;
 pub mod logs;
 pub mod ps;
 pub mod run;
@@ -33,6 +34,8 @@ pub enum Command {
     Ps(PsArgs),
     /// Show logs for a container
     Logs(LogsArgs),
+    /// Generate starter files for a new Egret project
+    Init(InitArgs),
     /// Validate task definition and related files
     Validate(ValidateArgs),
     /// Show version information
@@ -52,6 +55,21 @@ pub struct ValidateArgs {
     /// Path to local secrets mapping file (optional)
     #[arg(short, long)]
     pub secrets: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct InitArgs {
+    /// Output directory (default: current directory)
+    #[arg(short, long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Container image for the initial container definition
+    #[arg(long, default_value = "nginx:latest")]
+    pub image: String,
+
+    /// Task family name
+    #[arg(long, default_value = "my-app")]
+    pub family: String,
 }
 
 #[derive(Parser)]
@@ -313,6 +331,42 @@ mod tests {
                 );
             }
             _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_init_command_defaults() {
+        let cli = Cli::try_parse_from(["egret", "init"]).expect("should parse");
+        match cli.command {
+            Command::Init(args) => {
+                assert_eq!(args.dir.to_str(), Some("."));
+                assert_eq!(args.image, "nginx:latest");
+                assert_eq!(args.family, "my-app");
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_init_with_flags() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "init",
+            "--image",
+            "node:20",
+            "--family",
+            "web-service",
+            "--dir",
+            "/tmp/project",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Init(args) => {
+                assert_eq!(args.dir.to_str(), Some("/tmp/project"));
+                assert_eq!(args.image, "node:20");
+                assert_eq!(args.family, "web-service");
+            }
+            _ => panic!("expected Init command"),
         }
     }
 }

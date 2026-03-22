@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
         cli::Command::Stop(args) => cli::stop::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Ps(args) => cli::ps::execute(&args, cli.host.as_deref()).await?,
         cli::Command::Logs(args) => cli::logs::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Init(args) => cli::init::execute(&args)?,
         cli::Command::Validate(args) => cli::validate::execute(&args)?,
         cli::Command::Version => cli::version::execute(),
     }
