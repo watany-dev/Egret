@@ -83,6 +83,10 @@ pub struct ValidateArgs {
     /// Path to local secrets mapping file (optional)
     #[arg(short, long)]
     pub secrets: Option<PathBuf>,
+
+    /// Profile name for loading convention-based override/secrets files
+    #[arg(short, long)]
+    pub profile: Option<String>,
 }
 
 #[derive(Parser)]
@@ -113,6 +117,10 @@ pub struct RunArgs {
     /// Path to local secrets mapping file
     #[arg(short, long)]
     pub secrets: Option<PathBuf>,
+
+    /// Profile name for loading convention-based override/secrets files
+    #[arg(short, long)]
+    pub profile: Option<String>,
 
     /// Disable the ECS metadata/credentials sidecar server
     #[arg(long)]
@@ -484,6 +492,78 @@ mod tests {
                 assert_eq!(args.family, "my-app");
             }
             _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_profile() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--profile", "dev"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.profile.as_deref(), Some("dev"));
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_short_profile() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "-p", "staging"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.profile.as_deref(), Some("staging"));
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_profile_with_override() {
+        let cli = Cli::try_parse_from([
+            "egret",
+            "run",
+            "-f",
+            "task.json",
+            "--profile",
+            "dev",
+            "--override",
+            "custom.json",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.profile.as_deref(), Some("dev"));
+                assert_eq!(
+                    args.r#override.as_ref().unwrap().to_str(),
+                    Some("custom.json")
+                );
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_without_profile() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.profile.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_validate_with_profile() {
+        let cli = Cli::try_parse_from(["egret", "validate", "-f", "task.json", "--profile", "dev"])
+            .expect("should parse");
+        match cli.command {
+            Command::Validate(args) => {
+                assert_eq!(args.profile.as_deref(), Some("dev"));
+            }
+            _ => panic!("expected Validate command"),
         }
     }
 

@@ -31,6 +31,7 @@ pub fn execute(args: &InitArgs) -> Result<()> {
             generate_override_template(container_name),
         ),
         ("secrets.local.json", generate_secrets_template()),
+        (".egret.toml", generate_egret_config()),
     ];
 
     for (filename, content) in &files {
@@ -102,6 +103,11 @@ pub fn generate_override_template(container_name: &str) -> String {
         }
     });
     serde_json::to_string_pretty(&value).unwrap_or_default()
+}
+
+/// Generate an `.egret.toml` configuration template.
+pub fn generate_egret_config() -> String {
+    "# Egret configuration\n# default_profile = \"dev\"\n".to_string()
 }
 
 /// Generate a secrets mapping JSON template.
@@ -183,6 +189,20 @@ mod tests {
         let json = generate_task_definition("test", "alpine:latest");
         let td = TaskDefinition::from_json(&json).unwrap();
         assert!(!td.container_definitions[0].port_mappings.is_empty());
+    }
+
+    #[test]
+    fn generate_egret_config_is_valid_toml() {
+        let content = generate_egret_config();
+        // All lines are comments, so parsing should succeed with default values
+        let config: toml::Value = toml::from_str(&content).unwrap();
+        assert!(config.as_table().unwrap().is_empty());
+    }
+
+    #[test]
+    fn generate_egret_config_has_commented_defaults() {
+        let content = generate_egret_config();
+        assert!(content.contains("# default_profile"));
     }
 
     #[test]
