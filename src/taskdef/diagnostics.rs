@@ -151,7 +151,11 @@ pub fn validate_overrides(
             message: format!("override references unknown container '{name}'"),
             suggestion: Some(format!(
                 "available containers: {}",
-                names.iter().copied().collect::<Vec<_>>().join(", ")
+                {
+                    let mut sorted: Vec<_> = names.iter().copied().collect();
+                    sorted.sort_unstable();
+                    sorted.join(", ")
+                }
             )),
         })
         .collect()
@@ -255,7 +259,11 @@ fn check_depends_on(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
                     ),
                     suggestion: Some(format!(
                         "available containers: {}",
-                        names.iter().copied().collect::<Vec<_>>().join(", ")
+                        {
+                            let mut sorted: Vec<_> = names.iter().copied().collect();
+                            sorted.sort_unstable();
+                            sorted.join(", ")
+                        }
                     )),
                 });
             }
