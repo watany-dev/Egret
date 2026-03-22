@@ -89,6 +89,10 @@ pub struct RunArgs {
     /// Disable the ECS metadata/credentials sidecar server
     #[arg(long)]
     pub no_metadata: bool,
+
+    /// Validate and display configuration without starting containers
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Parser)]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -52,6 +52,18 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         tracing::warn!(
             "Task definition has secrets but --secrets flag was not provided. Secret values will not be resolved."
         );
+    }
+
+    // Dry-run: display resolved configuration and exit
+    if args.dry_run {
+        let secret_names: HashSet<String> = task_def
+            .container_definitions
+            .iter()
+            .flat_map(|c| c.secrets.iter().map(|s| s.name.clone()))
+            .collect();
+        let output = display_dry_run(&task_def, &secret_names);
+        println!("{output}");
+        return Ok(());
     }
 
     let client = Arc::new(ContainerClient::connect(host).await?);
@@ -344,6 +356,74 @@ fn build_container_config(
         health_check,
         binds,
     }
+}
+
+/// Format resolved configuration for dry-run output.
+fn display_dry_run(task_def: &TaskDefinition, secret_names: &HashSet<String>) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("Dry-run: {} ({})\n", task_def.family, "no containers will be started"));
+    output.push_str(&format!("Network: egret-{}\n", task_def.family));
+
+    for (i, container) in task_def.container_definitions.iter().enumerate() {
+        if i > 0 {
+            output.push('\n');
+        }
+        output.push_str(&format_container_dry_run(
+            &task_def.family,
+            container,
+            secret_names,
+        ));
+    }
+
+    output
+}
+
+/// Format a single container's resolved configuration for dry-run output.
+fn format_container_dry_run(
+    family: &str,
+    container: &ContainerDefinition,
+    secret_names: &HashSet<String>,
+) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("\nContainer: {}-{}\n", family, container.name));
+    output.push_str(&format!("  Image: {}\n", container.image));
+
+    if !container.environment.is_empty() {
+        output.push_str("  Environment:\n");
+        for env in &container.environment {
+            if secret_names.contains(&env.name) {
+                output.push_str(&format!("    {}=******\n", env.name));
+            } else {
+                output.push_str(&format!("    {}={}\n", env.name, env.value));
+            }
+        }
+    }
+
+    if !container.port_mappings.is_empty() {
+        output.push_str("  Ports:\n");
+        for pm in &container.port_mappings {
+            let host_port = pm.host_port.unwrap_or(pm.container_port);
+            output.push_str(&format!(
+                "    {}:{}/{}\n",
+                host_port, pm.container_port, pm.protocol
+            ));
+        }
+    }
+
+    if !container.depends_on.is_empty() {
+        let deps: Vec<String> = container
+            .depends_on
+            .iter()
+            .map(|d| format!("{} ({:?})", d.container_name, d.condition))
+            .collect();
+        output.push_str(&format!("  Depends on: {}\n", deps.join(", ")));
+    }
+
+    if let Some(hc) = &container.health_check {
+        output.push_str(&format!("  Health check: {}\n", hc.command.join(" ")));
+    }
+
+    output
 }
 
 #[cfg(test)]
@@ -987,5 +1067,215 @@ mod tests {
     fn format_log_line_produces_ansi_output() {
         let result = format_log_line("app", "hello world", "32");
         assert_eq!(result, "\x1b[32m[app]\x1b[0m hello world");
+    }
+
+    // --- dry-run tests ---
+
+    #[test]
+    fn format_container_dry_run_basic() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "nginx:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
+            mount_points: vec![],
+        };
+        let output = format_container_dry_run("test", &def, &HashSet::new());
+        assert!(output.contains("Container: test-app"));
+        assert!(output.contains("Image: nginx:latest"));
+    }
+
+    #[test]
+    fn format_container_dry_run_with_ports() {
+        let def = ContainerDefinition {
+            name: "web".to_string(),
+            image: "nginx:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![PortMapping {
+                container_port: 80,
+                host_port: Some(8080),
+                protocol: "tcp".to_string(),
+            }],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
+            mount_points: vec![],
+        };
+        let output = format_container_dry_run("test", &def, &HashSet::new());
+        assert!(output.contains("8080:80/tcp"));
+    }
+
+    #[test]
+    fn format_container_dry_run_masks_secrets() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![
+                Environment {
+                    name: "PUBLIC_VAR".to_string(),
+                    value: "visible".to_string(),
+                },
+                Environment {
+                    name: "DB_PASSWORD".to_string(),
+                    value: "super-secret".to_string(),
+                },
+            ],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
+            mount_points: vec![],
+        };
+        let secret_names: HashSet<String> =
+            ["DB_PASSWORD".to_string()].into_iter().collect();
+        let output = format_container_dry_run("test", &def, &secret_names);
+        assert!(output.contains("PUBLIC_VAR=visible"));
+        assert!(output.contains("DB_PASSWORD=******"));
+        assert!(!output.contains("super-secret"));
+    }
+
+    #[test]
+    fn format_container_dry_run_with_depends_on() {
+        use crate::taskdef::DependencyCondition;
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![crate::taskdef::DependsOn {
+                container_name: "db".to_string(),
+                condition: DependencyCondition::Healthy,
+            }],
+            health_check: None,
+            mount_points: vec![],
+        };
+        let output = format_container_dry_run("test", &def, &HashSet::new());
+        assert!(output.contains("Depends on:"));
+        assert!(output.contains("db"));
+    }
+
+    #[test]
+    fn format_container_dry_run_with_health_check() {
+        use crate::taskdef::HealthCheck;
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: Some(HealthCheck {
+                command: vec!["CMD-SHELL".into(), "curl -f http://localhost/".into()],
+                interval: 10,
+                timeout: 5,
+                retries: 3,
+                start_period: 0,
+            }),
+            mount_points: vec![],
+        };
+        let output = format_container_dry_run("test", &def, &HashSet::new());
+        assert!(output.contains("Health check: CMD-SHELL curl -f http://localhost/"));
+    }
+
+    #[test]
+    fn display_dry_run_multi_container() {
+        let td = TaskDefinition {
+            family: "my-app".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
+            volumes: vec![],
+            container_definitions: vec![
+                ContainerDefinition {
+                    name: "web".to_string(),
+                    image: "nginx:latest".to_string(),
+                    essential: true,
+                    command: vec![],
+                    entry_point: vec![],
+                    environment: vec![],
+                    port_mappings: vec![PortMapping {
+                        container_port: 80,
+                        host_port: Some(8080),
+                        protocol: "tcp".to_string(),
+                    }],
+                    secrets: vec![],
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
+                    mount_points: vec![],
+                },
+                ContainerDefinition {
+                    name: "api".to_string(),
+                    image: "node:20".to_string(),
+                    essential: true,
+                    command: vec![],
+                    entry_point: vec![],
+                    environment: vec![],
+                    port_mappings: vec![PortMapping {
+                        container_port: 3000,
+                        host_port: Some(3000),
+                        protocol: "tcp".to_string(),
+                    }],
+                    secrets: vec![],
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: None,
+                    depends_on: vec![],
+                    health_check: None,
+                    mount_points: vec![],
+                },
+            ],
+        };
+        let output = display_dry_run(&td, &HashSet::new());
+        assert!(output.contains("Network: egret-my-app"));
+        assert!(output.contains("Container: my-app-web"));
+        assert!(output.contains("Container: my-app-api"));
+    }
+
+    #[test]
+    fn parse_run_with_dry_run_flag() {
+        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--dry-run"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.dry_run);
+            }
+            _ => panic!("expected Run command"),
+        }
     }
 }
