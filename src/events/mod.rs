@@ -201,4 +201,11 @@ mod tests {
         assert_eq!(event.family, "my-app");
         assert_eq!(event.container_name.as_deref(), Some("web"));
     }
+
+    #[test]
+    fn ndjson_event_sink_emits_without_panic() {
+        let sink = NdjsonEventSink;
+        let event = LifecycleEvent::new(EventType::Created, "test-app", Some("web"), Some("test"));
+        sink.emit(&event); // Should write to stderr without panic
+    }
 }

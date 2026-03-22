@@ -126,10 +126,10 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 | ID | 要件 | 状態 |
 |----|------|------|
 | FR-12.1 | `egret watch` でファイル変更時にタスクを自動再起動できる | 🔲 未実装 |
-| FR-12.2 | `egret diff` でタスク定義をセマンティックに比較できる | 🔲 未実装 |
+| FR-12.2 | `egret diff` でタスク定義をセマンティックに比較できる | ✅ 実装済み |
 | FR-12.3 | `--profile` で設定プロファイル（override + secrets）を切り替えできる | 🔲 未実装 |
 | FR-12.4 | `egret compose-import` で docker-compose.yml を ECS タスク定義に変換できる | 🔲 未実装 |
-| FR-12.5 | `egret completions` でシェル補完スクリプト（bash/zsh/fish）を生成できる | 🔲 未実装 |
+| FR-12.5 | `egret completions` でシェル補完スクリプト（bash/zsh/fish）を生成できる | ✅ 実装済み |
 
 ---
 

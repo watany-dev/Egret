@@ -53,6 +53,14 @@ egret stop <family-name>
 # Stop all running tasks
 egret stop --all
 
+# Compare two task definitions semantically
+egret diff task-v1.json task-v2.json
+
+# Generate shell completion scripts
+egret completions bash > ~/.bash_completion.d/egret
+egret completions zsh > ~/.zfunc/_egret
+egret completions fish > ~/.config/fish/completions/egret.fish
+
 # Show version
 egret version
 ```
@@ -201,6 +209,26 @@ egret logs app --follow
 | Flag | Description |
 |------|-------------|
 | `-f, --follow` | Follow log output (like `tail -f`) |
+
+### `egret diff`
+
+Compares two task definition files semantically, showing differences at the container, environment variable, and port level.
+
+```bash
+egret diff task-v1.json task-v2.json
+```
+
+Output shows added (`+`), removed (`-`), and changed (`~`) fields organized by container.
+
+### `egret completions`
+
+Generates shell completion scripts for bash, zsh, or fish.
+
+```bash
+egret completions bash   # Output bash completions
+egret completions zsh    # Output zsh completions
+egret completions fish   # Output fish completions
+```
 
 ### Container Runtime
 
@@ -399,7 +427,7 @@ make clean      # cargo clean
 - **Phase 5**: Volumes + log coloring + UX improvements ✅
 - **Phase 6**: Validation + init + dry-run ✅
 - **Phase 7**: Observability + diagnostics ✅
-- **Phase 8**: Workflow acceleration
+- **Phase 8**: Workflow acceleration (in progress)
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
 
