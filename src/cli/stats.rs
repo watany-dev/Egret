@@ -161,11 +161,7 @@ mod tests {
             ..MockContainerClient::new()
         };
 
-        let args = StatsArgs {
-            family: None,
-            interval: 2,
-            no_stream: true,
-        };
+        let args = StatsArgs { family: None };
         execute_with_client(&args, &mock)
             .await
             .expect("should succeed");
@@ -179,11 +175,7 @@ mod tests {
             ..MockContainerClient::new()
         };
 
-        let args = StatsArgs {
-            family: None,
-            interval: 2,
-            no_stream: true,
-        };
+        let args = StatsArgs { family: None };
         execute_with_client(&args, &mock)
             .await
             .expect("should succeed");
@@ -199,8 +191,6 @@ mod tests {
 
         let args = StatsArgs {
             family: Some("my-app".to_string()),
-            interval: 2,
-            no_stream: true,
         };
         execute_with_client(&args, &mock)
             .await
@@ -215,11 +205,7 @@ mod tests {
             ..MockContainerClient::new()
         };
 
-        let args = StatsArgs {
-            family: None,
-            interval: 2,
-            no_stream: true,
-        };
+        let args = StatsArgs { family: None };
         // Should succeed even when stats fail — shows "N/A"
         execute_with_client(&args, &mock)
             .await

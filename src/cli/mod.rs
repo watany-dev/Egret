@@ -68,14 +68,6 @@ pub struct InspectArgs {
 pub struct StatsArgs {
     /// Filter by task family name
     pub family: Option<String>,
-
-    /// Update interval in seconds (for streaming mode)
-    #[arg(long, default_value = "2")]
-    pub interval: u64,
-
-    /// Show a single snapshot instead of streaming
-    #[arg(long)]
-    pub no_stream: bool,
 }
 
 #[derive(Parser)]
@@ -444,32 +436,18 @@ mod tests {
         match cli.command {
             Command::Stats(args) => {
                 assert!(args.family.is_none());
-                assert_eq!(args.interval, 2);
-                assert!(!args.no_stream);
             }
             _ => panic!("expected Stats command"),
         }
     }
 
     #[test]
-    fn parse_stats_with_no_stream() {
-        let cli = Cli::try_parse_from(["egret", "stats", "--no-stream"]).expect("should parse");
-        match cli.command {
-            Command::Stats(args) => {
-                assert!(args.no_stream);
-            }
-            _ => panic!("expected Stats command"),
-        }
-    }
-
-    #[test]
-    fn parse_stats_with_family_and_interval() {
-        let cli = Cli::try_parse_from(["egret", "stats", "my-app", "--interval", "5"])
-            .expect("should parse");
+    fn parse_stats_with_family() {
+        let cli =
+            Cli::try_parse_from(["egret", "stats", "my-app"]).expect("should parse");
         match cli.command {
             Command::Stats(args) => {
                 assert_eq!(args.family.as_deref(), Some("my-app"));
-                assert_eq!(args.interval, 5);
             }
             _ => panic!("expected Stats command"),
         }
