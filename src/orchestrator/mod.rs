@@ -753,6 +753,7 @@ mod tests {
                 labels: HashMap::new(),
                 extra_hosts: vec![],
                 health_check: None,
+                binds: vec![],
             },
             depends_on: depends
                 .iter()

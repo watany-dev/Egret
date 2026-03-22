@@ -17,7 +17,7 @@ use crate::metadata::{
 use crate::orchestrator::{ContainerSpec, orchestrate_startup};
 use crate::overrides::OverrideConfig;
 use crate::secrets::SecretsResolver;
-use crate::taskdef::{ContainerDefinition, Environment, TaskDefinition};
+use crate::taskdef::{ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume};
 
 /// Execute the `run` subcommand.
 #[cfg(not(tarpaulin_include))]
@@ -106,8 +106,13 @@ pub async fn run_task(
         .container_definitions
         .iter()
         .map(|def| {
-            let config =
-                build_container_config(&task_def.family, def, &network_name, metadata_port);
+            let config = build_container_config(
+                &task_def.family,
+                def,
+                &network_name,
+                metadata_port,
+                &task_def.volumes,
+            );
             ContainerSpec {
                 name: def.name.clone(),
                 config,
@@ -228,11 +233,44 @@ async fn stream_logs_until_signal(client: &Arc<ContainerClient>, containers: &[(
     }
 }
 
+/// Resolve mount points against task-level volumes into Docker bind mount strings.
+///
+/// Returns bind strings in format "host_path:container_path" or "host_path:container_path:ro".
+/// Volumes without `host.source_path` (Docker-managed volumes) are skipped with a warning.
+fn resolve_binds(mount_points: &[MountPoint], volumes: &[Volume]) -> Vec<String> {
+    let volume_map: HashMap<&str, &Volume> = volumes.iter().map(|v| (v.name.as_str(), v)).collect();
+
+    mount_points
+        .iter()
+        .filter_map(|mp| {
+            let volume = volume_map.get(mp.source_volume.as_str())?;
+            let host = match &volume.host {
+                Some(h) => h,
+                None => {
+                    tracing::warn!(
+                        volume = %volume.name,
+                        "Skipping volume without host.sourcePath (Docker-managed volumes not supported)"
+                    );
+                    return None;
+                }
+            };
+
+            let bind = if mp.read_only {
+                format!("{}:{}:ro", host.source_path, mp.container_path)
+            } else {
+                format!("{}:{}", host.source_path, mp.container_path)
+            };
+            Some(bind)
+        })
+        .collect()
+}
+
 fn build_container_config(
     family: &str,
     def: &ContainerDefinition,
     network: &str,
     metadata_port: Option<u16>,
+    volumes: &[Volume],
 ) -> ContainerConfig {
     let labels = HashMap::from([
         ("egret.managed".into(), "true".into()),
@@ -277,6 +315,8 @@ fn build_container_config(
         }
     });
 
+    let binds = resolve_binds(&def.mount_points, volumes);
+
     ContainerConfig {
         name: format!("{family}-{}", def.name),
         image: def.image.clone(),
@@ -289,6 +329,7 @@ fn build_container_config(
         labels,
         extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],
         health_check,
+        binds,
     }
 }
 
@@ -304,7 +345,8 @@ mod tests {
     use crate::cli::{Cli, Command};
     use crate::container::test_support::MockContainerClient;
     use crate::taskdef::{
-        ContainerDefinition, DependencyCondition, DependsOn, Environment, PortMapping,
+        ContainerDefinition, DependencyCondition, DependsOn, Environment, MountPoint, PortMapping,
+        Volume, VolumeHost,
     };
 
     fn single_container_taskdef() -> TaskDefinition {
@@ -312,6 +354,7 @@ mod tests {
             family: "web".to_string(),
             task_role_arn: None,
             execution_role_arn: None,
+            volumes: vec![],
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),
@@ -326,6 +369,7 @@ mod tests {
                 memory_reservation: None,
                 depends_on: vec![],
                 health_check: None,
+                mount_points: vec![],
             }],
         }
     }
@@ -335,6 +379,7 @@ mod tests {
             family: "multi".to_string(),
             task_role_arn: None,
             execution_role_arn: None,
+            volumes: vec![],
             container_definitions: vec![
                 ContainerDefinition {
                     name: "app".to_string(),
@@ -350,6 +395,7 @@ mod tests {
                     memory_reservation: None,
                     depends_on: vec![],
                     health_check: None,
+                    mount_points: vec![],
                 },
                 ContainerDefinition {
                     name: "sidecar".to_string(),
@@ -365,6 +411,7 @@ mod tests {
                     memory_reservation: None,
                     depends_on: vec![],
                     health_check: None,
+                    mount_points: vec![],
                 },
             ],
         }
@@ -510,9 +557,10 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
-        let config = build_container_config("my-app", &def, "egret-my-app", None);
+        let config = build_container_config("my-app", &def, "egret-my-app", None, &[]);
 
         assert_eq!(config.name, "my-app-app");
         assert_eq!(config.image, "nginx:latest");
@@ -550,9 +598,10 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None);
+        let config = build_container_config("test", &def, "egret-test", None, &[]);
 
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
@@ -575,9 +624,10 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None);
+        let config = build_container_config("test", &def, "egret-test", None, &[]);
         assert_eq!(
             config.extra_hosts,
             vec!["host.docker.internal:host-gateway"]
@@ -600,9 +650,10 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None);
+        let config = build_container_config("test", &def, "egret-test", None, &[]);
 
         assert!(config.command.is_empty());
         assert!(config.entry_point.is_empty());
@@ -626,9 +677,10 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", Some(12345));
+        let config = build_container_config("test", &def, "egret-test", Some(12345), &[]);
 
         assert!(config.env.contains(
             &"ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:12345/v4/app".to_string()
@@ -657,9 +709,10 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None);
+        let config = build_container_config("test", &def, "egret-test", None, &[]);
 
         assert!(
             !config
@@ -722,9 +775,10 @@ mod tests {
                 retries: 3,
                 start_period: 15,
             }),
+            mount_points: vec![],
         };
 
-        let config = build_container_config("test", &def, "egret-test", None);
+        let config = build_container_config("test", &def, "egret-test", None, &[]);
         let hc = config
             .health_check
             .as_ref()
@@ -752,6 +806,7 @@ mod tests {
             family: "test".to_string(),
             task_role_arn: None,
             execution_role_arn: None,
+            volumes: vec![],
             container_definitions: vec![
                 ContainerDefinition {
                     name: "db".to_string(),
@@ -767,6 +822,7 @@ mod tests {
                     memory_reservation: None,
                     depends_on: vec![],
                     health_check: None,
+                    mount_points: vec![],
                 },
                 ContainerDefinition {
                     name: "app".to_string(),
@@ -785,6 +841,7 @@ mod tests {
                         condition: DependencyCondition::Start,
                     }],
                     health_check: None,
+                    mount_points: vec![],
                 },
             ],
         };
@@ -798,5 +855,105 @@ mod tests {
         // DAG ensures db starts before app
         assert_eq!(containers[0].1, "db");
         assert_eq!(containers[1].1, "app");
+    }
+
+    #[test]
+    fn resolve_binds_single_mount() {
+        let volumes = vec![Volume {
+            name: "data".to_string(),
+            host: Some(VolumeHost {
+                source_path: "/host/data".to_string(),
+            }),
+        }];
+        let mount_points = vec![MountPoint {
+            source_volume: "data".to_string(),
+            container_path: "/app/data".to_string(),
+            read_only: false,
+        }];
+
+        let binds = resolve_binds(&mount_points, &volumes);
+        assert_eq!(binds, vec!["/host/data:/app/data"]);
+    }
+
+    #[test]
+    fn resolve_binds_read_only() {
+        let volumes = vec![Volume {
+            name: "config".to_string(),
+            host: Some(VolumeHost {
+                source_path: "/host/config".to_string(),
+            }),
+        }];
+        let mount_points = vec![MountPoint {
+            source_volume: "config".to_string(),
+            container_path: "/app/config".to_string(),
+            read_only: true,
+        }];
+
+        let binds = resolve_binds(&mount_points, &volumes);
+        assert_eq!(binds, vec!["/host/config:/app/config:ro"]);
+    }
+
+    #[test]
+    fn resolve_binds_skips_docker_managed_volume() {
+        let volumes = vec![
+            Volume {
+                name: "data".to_string(),
+                host: Some(VolumeHost {
+                    source_path: "/host/data".to_string(),
+                }),
+            },
+            Volume {
+                name: "cache".to_string(),
+                host: None,
+            },
+        ];
+        let mount_points = vec![
+            MountPoint {
+                source_volume: "data".to_string(),
+                container_path: "/app/data".to_string(),
+                read_only: false,
+            },
+            MountPoint {
+                source_volume: "cache".to_string(),
+                container_path: "/tmp/cache".to_string(),
+                read_only: true,
+            },
+        ];
+
+        let binds = resolve_binds(&mount_points, &volumes);
+        assert_eq!(binds, vec!["/host/data:/app/data"]);
+    }
+
+    #[test]
+    fn build_container_config_with_volumes() {
+        let volumes = vec![Volume {
+            name: "data".to_string(),
+            host: Some(VolumeHost {
+                source_path: "/host/data".to_string(),
+            }),
+        }];
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            essential: true,
+            command: vec![],
+            entry_point: vec![],
+            environment: vec![],
+            port_mappings: vec![],
+            secrets: vec![],
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: vec![],
+            health_check: None,
+            mount_points: vec![MountPoint {
+                source_volume: "data".to_string(),
+                container_path: "/app/data".to_string(),
+                read_only: false,
+            }],
+        };
+
+        let config = build_container_config("test", &def, "egret-test", None, &volumes);
+        assert_eq!(config.binds, vec!["/host/data:/app/data"]);
     }
 }

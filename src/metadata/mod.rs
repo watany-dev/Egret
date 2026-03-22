@@ -349,6 +349,7 @@ mod tests {
             family: "my-app".to_string(),
             task_role_arn: Some("arn:aws:iam::123456789012:role/my-role".to_string()),
             execution_role_arn: None,
+            volumes: vec![],
             container_definitions: vec![
                 ContainerDefinition {
                     name: "web".to_string(),
@@ -364,6 +365,7 @@ mod tests {
                     memory_reservation: None,
                     depends_on: vec![],
                     health_check: None,
+                    mount_points: vec![],
                 },
                 ContainerDefinition {
                     name: "sidecar".to_string(),
@@ -379,6 +381,7 @@ mod tests {
                     memory_reservation: None,
                     depends_on: vec![],
                     health_check: None,
+                    mount_points: vec![],
                 },
             ],
         }
@@ -424,6 +427,7 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
         let meta = build_container_metadata("my-app", &def);
@@ -483,6 +487,7 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
         let meta = build_container_metadata("test", &def);
@@ -507,6 +512,7 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
         let meta = build_container_metadata("test", &def);
@@ -523,6 +529,7 @@ mod tests {
             family: "test".to_string(),
             task_role_arn: None,
             execution_role_arn: None,
+            volumes: vec![],
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "alpine:latest".to_string(),
@@ -537,6 +544,7 @@ mod tests {
                 memory_reservation: None,
                 depends_on: vec![],
                 health_check: None,
+                mount_points: vec![],
             }],
         };
 
@@ -564,6 +572,7 @@ mod tests {
             memory_reservation: None,
             depends_on: vec![],
             health_check: None,
+            mount_points: vec![],
         };
 
         let meta = build_container_metadata("test", &def);

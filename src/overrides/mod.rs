@@ -117,6 +117,7 @@ mod tests {
             family: "test".to_string(),
             task_role_arn: None,
             execution_role_arn: None,
+            volumes: vec![],
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),
@@ -138,6 +139,7 @@ mod tests {
                 memory_reservation: None,
                 depends_on: vec![],
                 health_check: None,
+                mount_points: vec![],
             }],
         }
     }
