@@ -88,6 +88,9 @@ mod tests {
             image: image.to_string(),
             family: family.to_string(),
             state: state.to_string(),
+            health_status: None,
+            ports: vec![],
+            started_at: None,
         }
     }
 

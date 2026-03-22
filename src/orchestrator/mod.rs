@@ -606,24 +606,8 @@ mod tests {
         // First poll: starting, second poll: healthy
         {
             let mut q = mock.inspect_container_results.lock().unwrap();
-            q.push_back(Ok(ContainerInspection {
-                id: "id1".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("starting".into()),
-                },
-            }));
-            q.push_back(Ok(ContainerInspection {
-                id: "id1".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("healthy".into()),
-                },
-            }));
+            q.push_back(Ok(make_inspection("id1", Some("starting"))));
+            q.push_back(Ok(make_inspection("id1", Some("healthy"))));
         }
 
         let hc = HealthCheck {
@@ -644,15 +628,7 @@ mod tests {
         mock.inspect_container_results
             .lock()
             .unwrap()
-            .push_back(Ok(ContainerInspection {
-                id: "id1".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("unhealthy".into()),
-                },
-            }));
+            .push_back(Ok(make_inspection("id1", Some("unhealthy"))));
 
         let hc = HealthCheck {
             command: vec!["CMD-SHELL".into(), "false".into()],
@@ -677,15 +653,7 @@ mod tests {
             mock.inspect_container_results
                 .lock()
                 .unwrap()
-                .push_back(Ok(ContainerInspection {
-                    id: "id1".into(),
-                    state: ContainerState {
-                        status: "running".into(),
-                        running: true,
-                        exit_code: None,
-                        health_status: Some("starting".into()),
-                    },
-                }));
+                .push_back(Ok(make_inspection("id1", Some("starting"))));
         }
 
         let hc = HealthCheck {
@@ -778,6 +746,23 @@ mod tests {
     fn format_cycle_path_short_input() {
         assert_eq!(format_cycle_path(&[]), "unknown cycle");
         assert_eq!(format_cycle_path(&["a"]), "unknown cycle");
+    }
+
+    fn make_inspection(id: &str, health_status: Option<&str>) -> ContainerInspection {
+        ContainerInspection {
+            id: id.into(),
+            state: ContainerState {
+                status: "running".into(),
+                running: true,
+                exit_code: None,
+                health_status: health_status.map(String::from),
+            },
+            image: String::new(),
+            env: vec![],
+            network_name: None,
+            ports: vec![],
+            started_at: None,
+        }
     }
 
     // --- orchestrate_startup tests ---
@@ -876,15 +861,7 @@ mod tests {
         mock.inspect_container_results
             .lock()
             .unwrap()
-            .push_back(Ok(ContainerInspection {
-                id: "id-db".into(),
-                state: ContainerState {
-                    status: "running".into(),
-                    running: true,
-                    exit_code: None,
-                    health_status: Some("healthy".into()),
-                },
-            }));
+            .push_back(Ok(make_inspection("id-db", Some("healthy"))));
 
         let mut db_spec = make_spec("db", &[]);
         db_spec.health_check = Some(HealthCheck {
