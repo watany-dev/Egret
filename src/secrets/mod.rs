@@ -150,4 +150,18 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn error_display_messages() {
+        let err = SecretsResolver::from_json("bad").unwrap_err();
+        assert!(err.to_string().contains("failed to parse secrets JSON"));
+
+        let err = SecretsResolver::from_file(Path::new("/no/such")).unwrap_err();
+        assert!(err.to_string().contains("failed to read secrets file"));
+
+        let err = SecretsError::ArnNotFound {
+            arn: "arn:test".to_string(),
+        };
+        assert!(err.to_string().contains("arn:test"));
+    }
 }

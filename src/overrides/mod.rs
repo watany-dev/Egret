@@ -292,4 +292,15 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn error_display_messages() {
+        let err = OverrideConfig::from_json("bad").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to parse override JSON"));
+
+        let err = OverrideConfig::from_file(Path::new("/no/such")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to read override file"));
+    }
 }

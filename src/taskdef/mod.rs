@@ -795,6 +795,103 @@ mod tests {
     }
 
     #[test]
+    fn validate_health_check_empty_command() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": { "command": [] }
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("healthCheck command must not be empty")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_health_check_invalid_prefix() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": { "command": ["INVALID", "curl localhost"] }
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("CMD-SHELL, CMD, or NONE")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_health_check_cmd_prefix_valid() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": { "command": ["CMD", "/bin/check"] }
+                }
+            ]
+        }"#;
+        let result = TaskDefinition::from_json(json);
+        assert!(result.is_ok(), "CMD prefix should be valid");
+    }
+
+    #[test]
+    fn validate_health_check_none_prefix_valid() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "alpine:latest",
+                    "healthCheck": { "command": ["NONE"] }
+                }
+            ]
+        }"#;
+        let result = TaskDefinition::from_json(json);
+        assert!(result.is_ok(), "NONE prefix should be valid");
+    }
+
+    #[test]
+    fn error_file_too_large_display() {
+        let err = TaskDefError::FileTooLarge {
+            path: PathBuf::from("/tmp/big.json"),
+            size: 20_000_000,
+            max: MAX_TASKDEF_FILE_SIZE,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("too large"));
+        assert!(msg.contains("20000000"));
+    }
+
+    #[test]
+    fn from_file_reads_valid_json() {
+        let dir = std::env::temp_dir().join("egret-test-taskdef");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("valid.json");
+        std::fs::write(
+            &path,
+            r#"{"family":"test","containerDefinitions":[{"name":"app","image":"alpine:latest"}]}"#,
+        )
+        .unwrap();
+        let task_def = TaskDefinition::from_file(&path).expect("should parse from file");
+        assert_eq!(task_def.family, "test");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn validate_depends_on_valid() {
         let json = r#"{
             "family": "test",
