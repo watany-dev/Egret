@@ -20,6 +20,21 @@ egret run -f task-definition.json --host unix:///run/podman/podman.sock
 # Run without metadata/credentials sidecar
 egret run -f task-definition.json --no-metadata
 
+# Dry-run: show resolved configuration without starting containers
+egret run -f task-definition.json --dry-run
+
+# Validate a task definition
+egret validate -f task-definition.json
+
+# Generate starter files for a new project
+egret init --dir my-project --image nginx:latest --family my-app
+
+# List running tasks
+egret ps
+
+# Show logs for a container
+egret logs app
+
 # Stop a specific task
 egret stop <family-name>
 
@@ -64,6 +79,7 @@ egret run -f path/to/task-definition.json
 | `--override` | — | Path to local override file (`egret-override.json`) |
 | `-s, --secrets` | — | Path to local secrets mapping file (`secrets.local.json`) |
 | `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
+| `--dry-run` | — | Show resolved configuration without starting containers |
 | `--host` | `CONTAINER_HOST` | Container runtime socket URL |
 
 Press `Ctrl+C` to gracefully stop all containers and clean up resources.
@@ -79,6 +95,64 @@ egret stop my-app
 # Stop all Egret-managed tasks
 egret stop --all
 ```
+
+### `egret validate`
+
+Performs static analysis of task definition files, detecting errors before runtime.
+
+```bash
+egret validate -f task-definition.json
+egret validate -f task-definition.json --override egret-override.json --secrets secrets.local.json
+```
+
+Checks include:
+- Image name format validation
+- Host port conflict detection
+- `dependsOn` reference and cycle detection
+- Secret ARN format validation
+- Override container name cross-validation
+- Common mistakes (all containers non-essential, no port mappings)
+
+Diagnostics include field paths, severity levels (error/warning), and fix suggestions.
+
+### `egret init`
+
+Generates starter files for a new Egret project.
+
+```bash
+egret init
+egret init --dir my-project --image node:20 --family web-service
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dir` | `.` | Output directory |
+| `--image` | `nginx:latest` | Container image for the initial definition |
+| `--family` | `my-app` | Task family name |
+
+Creates: `task-definition.json`, `egret-override.json`, `secrets.local.json`. Existing files are skipped.
+
+### `egret ps`
+
+Lists running Egret-managed tasks.
+
+```bash
+egret ps
+egret ps my-app
+```
+
+### `egret logs`
+
+Shows logs for a specific container.
+
+```bash
+egret logs app
+egret logs app --follow
+```
+
+| Flag | Description |
+|------|-------------|
+| `-f, --follow` | Follow log output (like `tail -f`) |
 
 ### Container Runtime
 
@@ -224,8 +298,8 @@ The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and
 ```
 src/
 ├── main.rs              # Async entry point (clap + tokio)
-├── cli/                 # CLI commands: run, stop, version
-├── taskdef/             # ECS task definition JSON parser
+├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, version
+├── taskdef/             # ECS task definition JSON parser & validation diagnostics
 ├── container/           # OCI container runtime client (bollard, Docker/Podman)
 ├── overrides/           # Local override configuration
 ├── secrets/             # Secrets local resolver
@@ -272,7 +346,10 @@ make clean      # cargo clean
 - **Phase 2.5**: Container runtime compatibility (Docker + Podman) ✅
 - **Phase 3**: Metadata + credentials sidecar ✅
 - **Phase 4**: dependsOn DAG + health checks ✅
-- **Phase 5**: Volumes + log coloring + UX improvements
+- **Phase 5**: Volumes + log coloring + UX improvements ✅
+- **Phase 6**: Validation + init + dry-run ✅
+- **Phase 7**: Observability + diagnostics
+- **Phase 8**: Workflow acceleration
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
 
