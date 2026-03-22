@@ -36,11 +36,7 @@ pub async fn execute_with_client(
         let _ = writeln!(output, "--- {} ---", container.name);
         let _ = writeln!(output, "  ID:     {}", container.id);
         let _ = writeln!(output, "  Image:  {}", inspection.image);
-        let _ = writeln!(
-            output,
-            "  Status: {}",
-            inspection.state.status
-        );
+        let _ = writeln!(output, "  Status: {}", inspection.state.status);
 
         if let Some(health) = &inspection.state.health_status {
             let _ = writeln!(output, "  Health: {health}");
@@ -115,9 +111,7 @@ fn mask_env_var(env_var: &str, secret_names: &HashSet<String>) -> String {
 /// Format an inspect output for a set of containers (pure function for testing).
 #[allow(dead_code)]
 pub fn format_inspect_env(env: &[String], secret_names: &HashSet<String>) -> Vec<String> {
-    env.iter()
-        .map(|e| mask_env_var(e, secret_names))
-        .collect()
+    env.iter().map(|e| mask_env_var(e, secret_names)).collect()
 }
 
 #[cfg(test)]
@@ -128,9 +122,7 @@ mod tests {
 
     use super::*;
     use crate::container::test_support::MockContainerClient;
-    use crate::container::{
-        ContainerInfo, ContainerInspection, ContainerState, PortInfo,
-    };
+    use crate::container::{ContainerInfo, ContainerInspection, ContainerState, PortInfo};
 
     fn make_container_info(name: &str, family: &str) -> ContainerInfo {
         ContainerInfo {
@@ -194,12 +186,10 @@ mod tests {
     #[tokio::test]
     async fn inspect_shows_container_details() {
         let mock = MockContainerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                make_container_info("web", "my-app"),
-            ])])),
-            inspect_container_results: Mutex::new(VecDeque::from([Ok(make_inspection(
-                "web-id",
-            ))])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![make_container_info(
+                "web", "my-app",
+            )])])),
+            inspect_container_results: Mutex::new(VecDeque::from([Ok(make_inspection("web-id"))])),
             ..MockContainerClient::new()
         };
 
@@ -207,7 +197,9 @@ mod tests {
             family: "my-app".to_string(),
         };
         // Should succeed without error
-        execute_with_client(&args, &mock).await.expect("should succeed");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed");
     }
 
     #[tokio::test]
@@ -227,13 +219,14 @@ mod tests {
         let args = InspectArgs {
             family: "my-app".to_string(),
         };
-        execute_with_client(&args, &mock).await.expect("should succeed");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed");
     }
 
     #[test]
     fn mask_env_var_secret() {
-        let secret_names: HashSet<String> =
-            ["DB_PASSWORD".to_string()].into_iter().collect();
+        let secret_names: HashSet<String> = std::iter::once("DB_PASSWORD".to_string()).collect();
         assert_eq!(
             mask_env_var("DB_PASSWORD=secret123", &secret_names),
             "DB_PASSWORD=******"
@@ -243,10 +236,7 @@ mod tests {
     #[test]
     fn mask_env_var_non_secret() {
         let secret_names: HashSet<String> = HashSet::new();
-        assert_eq!(
-            mask_env_var("PORT=8080", &secret_names),
-            "PORT=8080"
-        );
+        assert_eq!(mask_env_var("PORT=8080", &secret_names), "PORT=8080");
     }
 
     #[test]
@@ -272,15 +262,14 @@ mod tests {
     #[tokio::test]
     async fn inspect_with_secret_masking() {
         let mut inspection = make_inspection("web-id");
-        inspection.labels.insert(
-            "egret.secrets".into(),
-            "DB_PASSWORD".into(),
-        );
+        inspection
+            .labels
+            .insert("egret.secrets".into(), "DB_PASSWORD".into());
 
         let mock = MockContainerClient {
-            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![
-                make_container_info("web", "my-app"),
-            ])])),
+            list_containers_results: Mutex::new(VecDeque::from([Ok(vec![make_container_info(
+                "web", "my-app",
+            )])])),
             inspect_container_results: Mutex::new(VecDeque::from([Ok(inspection)])),
             ..MockContainerClient::new()
         };
@@ -289,13 +278,15 @@ mod tests {
             family: "my-app".to_string(),
         };
         // Should succeed — secret masking happens internally
-        execute_with_client(&args, &mock).await.expect("should succeed");
+        execute_with_client(&args, &mock)
+            .await
+            .expect("should succeed");
     }
 
     #[test]
     fn format_inspect_env_masks_secrets() {
         let env = vec!["PORT=8080".into(), "SECRET_KEY=abc123".into()];
-        let secrets: HashSet<String> = ["SECRET_KEY".to_string()].into_iter().collect();
+        let secrets: HashSet<String> = std::iter::once("SECRET_KEY".to_string()).collect();
         let result = format_inspect_env(&env, &secrets);
         assert_eq!(result[0], "PORT=8080");
         assert_eq!(result[1], "SECRET_KEY=******");

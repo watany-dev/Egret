@@ -69,7 +69,9 @@ fn format_json(containers: &[ContainerInfo]) -> String {
 
 /// Format container list as a table string with aligned columns.
 fn format_table(containers: &[ContainerInfo]) -> String {
-    let headers = ["NAME", "IMAGE", "STATUS", "HEALTH", "PORTS", "UPTIME", "TASK"];
+    let headers = [
+        "NAME", "IMAGE", "STATUS", "HEALTH", "PORTS", "UPTIME", "TASK",
+    ];
 
     let health_values: Vec<String> = containers
         .iter()
@@ -78,7 +80,11 @@ fn format_table(containers: &[ContainerInfo]) -> String {
     let ports_values: Vec<String> = containers.iter().map(|c| format_ports(&c.ports)).collect();
     let uptime_values: Vec<String> = containers
         .iter()
-        .map(|c| c.started_at.as_deref().map_or_else(|| "-".to_string(), format_uptime))
+        .map(|c| {
+            c.started_at
+                .as_deref()
+                .map_or_else(|| "-".to_string(), format_uptime)
+        })
         .collect();
 
     // Calculate column widths
@@ -210,6 +216,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn container_info_full(
         name: &str,
         image: &str,

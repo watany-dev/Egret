@@ -49,7 +49,10 @@ pub fn format_history_table(entries: &[HistoryEntry]) -> String {
     let family_w = col_width(entries.iter().map(|e| e.family.len()), headers[0].len());
     let started_w = col_width(entries.iter().map(|e| e.started_at.len()), headers[1].len());
     let duration_w = col_width(duration_values.iter().map(String::len), headers[2].len());
-    let status_w = col_width(entries.iter().map(|e| e.exit_status.len()), headers[3].len());
+    let status_w = col_width(
+        entries.iter().map(|e| e.exit_status.len()),
+        headers[3].len(),
+    );
 
     let mut output = String::new();
 
@@ -141,8 +144,7 @@ mod tests {
             },
         ];
         let table = format_history_table(&entries);
-        let lines: Vec<&str> = table.lines().collect();
-        assert_eq!(lines.len(), 3); // header + 2 rows
+        assert_eq!(table.lines().count(), 3); // header + 2 rows
     }
 
     #[test]
