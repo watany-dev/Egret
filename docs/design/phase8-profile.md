@@ -47,6 +47,8 @@ pub enum ProfileError {
     ReadConfig { path: PathBuf, source: std::io::Error },
     #[error("failed to parse config file {path}: {source}")]
     ParseConfig { path: PathBuf, source: toml::de::Error },
+    #[error("invalid profile name '{name}': must match [A-Za-z0-9_-]+")]
+    InvalidProfileName { name: String },
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -69,7 +71,10 @@ impl EgretConfig {
     pub fn from_toml(toml_str: &str, source_path: &Path) -> Result<Self, ProfileError>;
 }
 
+pub fn validate_profile_name(name: &str) -> Result<(), ProfileError>;
 pub fn find_config(start_dir: &Path) -> Option<PathBuf>;
+pub fn load_config_with_warning(base_dir: &Path) -> Option<EgretConfig>;
+pub fn effective_profile<'a>(cli_profile: Option<&'a str>, config: Option<&'a EgretConfig>) -> Option<&'a str>;
 pub fn profile_override_path(base_dir: &Path, profile: &str) -> PathBuf;
 pub fn profile_secrets_path(base_dir: &Path, profile: &str) -> PathBuf;
 pub fn resolve(
@@ -77,7 +82,7 @@ pub fn resolve(
     profile: Option<&str>,
     explicit_override: Option<&Path>,
     explicit_secrets: Option<&Path>,
-) -> ResolvedPaths;
+) -> Result<ResolvedPaths, ProfileError>;
 ```
 
 ---
@@ -86,10 +91,12 @@ pub fn resolve(
 
 ```
 1. base_dir = args.task_definition.parent()
-2. .egret.toml を base_dir から上方探索 (find_config)
-3. effective_profile を決定:
-     args.profile (CLI) > config.default_profile (.egret.toml) > None
+2. profile::load_config_with_warning(base_dir)
+     → .egret.toml を上方探索、パース失敗時は tracing::warn! + None
+3. profile::effective_profile(args.profile, config)
+     → args.profile (CLI) > config.default_profile (.egret.toml) > None
 4. profile::resolve(base_dir, effective_profile, args.override, args.secrets)
+     → プロファイル名を validate_profile_name() で検証（不正文字 → エラー）
      各軸独立:
        - explicit flag あり → そのパスを使用
        - profile あり → 規約パスを生成 → ファイルが存在する場合のみ Some
@@ -114,7 +121,8 @@ pub fn resolve(
 
 | ケース | 挙動 | 理由 |
 |--------|------|------|
-| `.egret.toml` 読み込み/パース失敗 | warning + 無視 | 設定ファイルの欠落はデフォルト動作 |
+| `.egret.toml` 読み込み/パース失敗 | `tracing::warn!` + 無視（`None` にフォールバック） | 設定ファイルの欠落はデフォルト動作 |
+| プロファイル名に不正文字（`/`, `\`, `..`, スペース等） | hard error (`InvalidProfileName`) | パストラバーサル防止。`[A-Za-z0-9_-]+` のみ許可 |
 | プロファイル規約ファイルが存在しない | サイレントスキップ（None） | 片方だけ使うケースも多い |
 | 明示フラグのファイルが存在しない | hard error | ユーザが明示的に指定したため |
 

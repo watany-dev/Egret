@@ -25,6 +25,13 @@ pub enum ProfileError {
         /// Underlying TOML parse error.
         source: toml::de::Error,
     },
+
+    /// Profile name contains invalid characters.
+    #[error("invalid profile name '{name}': must match [A-Za-z0-9_-]+")]
+    InvalidProfileName {
+        /// The invalid profile name.
+        name: String,
+    },
 }
 
 /// Parsed `.egret.toml` configuration.
@@ -74,6 +81,28 @@ impl EgretConfig {
     }
 }
 
+/// Validate that a profile name contains only safe characters (`[A-Za-z0-9_-]+`).
+///
+/// Rejects names containing path separators, `..`, or other unsafe characters
+/// to prevent path traversal attacks.
+///
+/// # Errors
+///
+/// Returns `ProfileError::InvalidProfileName` if the name is empty or contains
+/// characters outside `[A-Za-z0-9_-]`.
+pub fn validate_profile_name(name: &str) -> Result<(), ProfileError> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ProfileError::InvalidProfileName {
+            name: name.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Search for `.egret.toml` starting from `start_dir` and walking up parent directories.
 ///
 /// Returns the path to the first `.egret.toml` found, or `None` if not found.
@@ -121,13 +150,21 @@ pub fn profile_secrets_path(base_dir: &Path, profile: &str) -> PathBuf {
 ///
 /// When a profile is specified but the convention file does not exist,
 /// that axis is silently skipped (returns `None`).
-#[must_use]
+///
+/// # Errors
+///
+/// Returns `ProfileError::InvalidProfileName` if the profile name contains
+/// unsafe characters (path separators, `..`, etc.).
 pub fn resolve(
     base_dir: &Path,
     profile: Option<&str>,
     explicit_override: Option<&Path>,
     explicit_secrets: Option<&Path>,
-) -> ResolvedPaths {
+) -> Result<ResolvedPaths, ProfileError> {
+    if let Some(prof) = profile {
+        validate_profile_name(prof)?;
+    }
+
     let base = if base_dir.as_os_str().is_empty() {
         Path::new(".")
     } else {
@@ -154,10 +191,40 @@ pub fn resolve(
         |p| Some(p.to_path_buf()),
     );
 
-    ResolvedPaths {
+    Ok(ResolvedPaths {
         override_path,
         secrets_path,
+    })
+}
+
+/// Load `.egret.toml` config from `base_dir` (searching upward), logging a warning on errors.
+///
+/// Returns `None` if no config file is found or if loading/parsing fails.
+#[must_use]
+pub fn load_config_with_warning(base_dir: &Path) -> Option<EgretConfig> {
+    let config_path = find_config(base_dir)?;
+    match EgretConfig::from_file(&config_path) {
+        Ok(config) => Some(config),
+        Err(err) => {
+            tracing::warn!(
+                path = %config_path.display(),
+                error = %err,
+                "Failed to load .egret.toml; ignoring"
+            );
+            None
+        }
     }
+}
+
+/// Determine the effective profile name from CLI arg and `.egret.toml` default.
+///
+/// Priority: explicit CLI `--profile` > `.egret.toml` `default_profile` > `None`.
+#[must_use]
+pub fn effective_profile<'a>(
+    cli_profile: Option<&'a str>,
+    config: Option<&'a EgretConfig>,
+) -> Option<&'a str> {
+    cli_profile.or_else(|| config.as_ref().and_then(|c| c.default_profile.as_deref()))
 }
 
 #[cfg(test)]
@@ -213,10 +280,14 @@ mod tests {
 
     #[test]
     fn parse_config_file_not_found() {
-        let result = EgretConfig::from_file(Path::new("/nonexistent/.egret.toml"));
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join(".egret.toml");
+
+        let result = EgretConfig::from_file(&missing_path);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("/nonexistent/.egret.toml"));
+        let missing_path_str = missing_path.to_string_lossy();
+        assert!(err.to_string().contains(missing_path_str.as_ref()));
     }
 
     // ── Error display tests ──
@@ -314,11 +385,73 @@ mod tests {
         assert_eq!(found, Some(config_path));
     }
 
+    // ── validate_profile_name tests ──
+
+    #[test]
+    fn validate_profile_name_valid_alphanumeric() {
+        assert!(validate_profile_name("dev").is_ok());
+        assert!(validate_profile_name("staging").is_ok());
+        assert!(validate_profile_name("prod-01").is_ok());
+        assert!(validate_profile_name("my_profile").is_ok());
+        assert!(validate_profile_name("Dev-2").is_ok());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_empty() {
+        let err = validate_profile_name("").unwrap_err();
+        assert!(err.to_string().contains("invalid profile name"));
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_path_traversal() {
+        assert!(validate_profile_name("../etc").is_err());
+        assert!(validate_profile_name("foo/bar").is_err());
+        assert!(validate_profile_name("foo\\bar").is_err());
+        assert!(validate_profile_name("..").is_err());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_special_chars() {
+        assert!(validate_profile_name("dev;rm -rf").is_err());
+        assert!(validate_profile_name("a b").is_err());
+        assert!(validate_profile_name("dev.staging").is_err());
+    }
+
+    // ── effective_profile tests ──
+
+    #[test]
+    fn effective_profile_cli_takes_precedence() {
+        let config = EgretConfig {
+            default_profile: Some("from-config".to_string()),
+        };
+        assert_eq!(
+            effective_profile(Some("from-cli"), Some(&config)),
+            Some("from-cli")
+        );
+    }
+
+    #[test]
+    fn effective_profile_falls_back_to_config() {
+        let config = EgretConfig {
+            default_profile: Some("from-config".to_string()),
+        };
+        assert_eq!(effective_profile(None, Some(&config)), Some("from-config"));
+    }
+
+    #[test]
+    fn effective_profile_none_when_both_absent() {
+        let config = EgretConfig {
+            default_profile: None,
+        };
+        assert_eq!(effective_profile(None, Some(&config)), None);
+        assert_eq!(effective_profile(None, None), None);
+    }
+
     // ── resolve tests ──
 
     #[test]
     fn resolve_no_profile_no_flags() {
-        let resolved = resolve(Path::new("/project"), None, None, None);
+        let resolved = resolve(Path::new("/project"), None, None, None).unwrap();
         assert_eq!(
             resolved,
             ResolvedPaths {
@@ -336,7 +469,7 @@ mod tests {
         std::fs::write(&override_file, "{}").unwrap();
         std::fs::write(&secrets_file, "{}").unwrap();
 
-        let resolved = resolve(dir.path(), Some("dev"), None, None);
+        let resolved = resolve(dir.path(), Some("dev"), None, None).unwrap();
         assert_eq!(resolved.override_path, Some(override_file));
         assert_eq!(resolved.secrets_path, Some(secrets_file));
     }
@@ -344,7 +477,7 @@ mod tests {
     #[test]
     fn resolve_profile_returns_none_when_files_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let resolved = resolve(dir.path(), Some("dev"), None, None);
+        let resolved = resolve(dir.path(), Some("dev"), None, None).unwrap();
         assert_eq!(
             resolved,
             ResolvedPaths {
@@ -361,7 +494,7 @@ mod tests {
         std::fs::write(&secrets_file, "{}").unwrap();
 
         let explicit = Path::new("custom-override.json");
-        let resolved = resolve(dir.path(), Some("dev"), Some(explicit), None);
+        let resolved = resolve(dir.path(), Some("dev"), Some(explicit), None).unwrap();
         assert_eq!(
             resolved.override_path,
             Some(PathBuf::from("custom-override.json"))
@@ -376,7 +509,7 @@ mod tests {
         std::fs::write(&override_file, "{}").unwrap();
 
         let explicit = Path::new("custom-secrets.json");
-        let resolved = resolve(dir.path(), Some("dev"), None, Some(explicit));
+        let resolved = resolve(dir.path(), Some("dev"), None, Some(explicit)).unwrap();
         assert_eq!(resolved.override_path, Some(override_file));
         assert_eq!(
             resolved.secrets_path,
@@ -393,7 +526,8 @@ mod tests {
             Some("dev"),
             Some(explicit_override),
             Some(explicit_secrets),
-        );
+        )
+        .unwrap();
         assert_eq!(resolved.override_path, Some(PathBuf::from("o.json")));
         assert_eq!(resolved.secrets_path, Some(PathBuf::from("s.json")));
     }
@@ -405,7 +539,7 @@ mod tests {
         let override_file = dir.path().join("egret-override.dev.json");
         std::fs::write(&override_file, "{}").unwrap();
 
-        let resolved = resolve(dir.path(), Some("dev"), None, None);
+        let resolved = resolve(dir.path(), Some("dev"), None, None).unwrap();
         assert_eq!(resolved.override_path, Some(override_file));
         assert!(resolved.secrets_path.is_none());
     }
@@ -413,9 +547,23 @@ mod tests {
     #[test]
     fn resolve_empty_base_dir_treated_as_current() {
         // When base_dir is empty string, treat as "."
-        let resolved = resolve(Path::new(""), Some("dev"), None, None);
+        let resolved = resolve(Path::new(""), Some("dev"), None, None).unwrap();
         // Files won't exist in ".", so both should be None
         assert!(resolved.override_path.is_none());
         assert!(resolved.secrets_path.is_none());
+    }
+
+    #[test]
+    fn resolve_rejects_path_traversal_profile() {
+        let result = resolve(Path::new("/project"), Some("../etc"), None, None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("invalid profile name"));
+    }
+
+    #[test]
+    fn resolve_rejects_slash_in_profile() {
+        let result = resolve(Path::new("/project"), Some("foo/bar"), None, None);
+        assert!(result.is_err());
     }
 }

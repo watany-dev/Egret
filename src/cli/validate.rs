@@ -19,18 +19,14 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
         .task_definition
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    let config =
-        profile::find_config(base_dir).and_then(|p| profile::EgretConfig::from_file(&p).ok());
-    let effective_profile = args
-        .profile
-        .as_deref()
-        .or_else(|| config.as_ref().and_then(|c| c.default_profile.as_deref()));
+    let config = profile::load_config_with_warning(base_dir);
+    let effective_profile = profile::effective_profile(args.profile.as_deref(), config.as_ref());
     let resolved = profile::resolve(
         base_dir,
         effective_profile,
         args.r#override.as_deref(),
         args.secrets.as_deref(),
-    );
+    )?;
 
     let task_json = std::fs::read_to_string(&args.task_definition)?;
     let override_json = resolved
