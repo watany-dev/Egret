@@ -232,12 +232,32 @@ fn podman_socket_candidates() -> Vec<String> {
     // Rootless Podman (XDG Base Directory Specification)
     if let Ok(xdg_dir) = std::env::var("XDG_RUNTIME_DIR") {
         candidates.push(format!("{xdg_dir}/podman/podman.sock"));
+    } else if let Some(uid) = current_uid() {
+        // Fallback: derive rootless socket path from UID.
+        // Covers sudo, cron, non-login shells, or separate terminal sessions
+        // where XDG_RUNTIME_DIR is not propagated.
+        candidates.push(format!("/run/user/{uid}/podman/podman.sock"));
     }
 
     // Rootful Podman
     candidates.push("/run/podman/podman.sock".to_string());
 
     candidates
+}
+
+/// Retrieve the current process owner's UID from `/proc/self` metadata.
+///
+/// Returns `None` on non-Linux platforms or if `/proc` is unavailable.
+#[cfg(unix)]
+fn current_uid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self").ok().map(|m| m.uid())
+}
+
+/// Stub for non-Unix platforms where rootless Podman is not applicable.
+#[cfg(not(unix))]
+fn current_uid() -> Option<u32> {
+    None
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -990,6 +1010,35 @@ mod tests {
             candidates.last().map(String::as_str),
             Some("/run/podman/podman.sock")
         );
+    }
+
+    #[test]
+    fn podman_socket_candidates_has_rootless_candidate() {
+        // Whether via XDG_RUNTIME_DIR or UID fallback, on a standard Linux
+        // system there should be at least one rootless candidate before rootful.
+        let candidates = podman_socket_candidates();
+        if std::env::var("XDG_RUNTIME_DIR").is_ok() || current_uid().is_some() {
+            assert!(
+                candidates.len() >= 2,
+                "expected rootless + rootful candidates, got: {candidates:?}"
+            );
+            // The first candidate should be a rootless socket path
+            let first = &candidates[0];
+            assert!(
+                first.contains("/podman/podman.sock") && first != "/run/podman/podman.sock",
+                "first candidate should be a rootless socket path, got: {first}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_uid_returns_valid_value() {
+        // On Linux with /proc, current_uid should return Some with a valid UID
+        let uid = current_uid();
+        if std::path::Path::new("/proc/self").exists() {
+            assert!(uid.is_some(), "current_uid() should return Some on Linux");
+        }
     }
 
     #[test]
