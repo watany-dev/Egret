@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::Result;
 
 use super::StatsArgs;
-use crate::cli::ps::format_bytes;
+use super::format::{col_width, format_bytes};
 use crate::container::{ContainerClient, ContainerInfo, ContainerRuntime, ContainerStats};
 
 /// Execute the `stats` subcommand.
@@ -113,11 +113,6 @@ pub fn format_stats_table(data: &[(&ContainerInfo, Option<ContainerStats>)]) -> 
         output.pop();
     }
     output
-}
-
-/// Calculate column width.
-fn col_width(data_widths: impl Iterator<Item = usize>, header_width: usize) -> usize {
-    data_widths.max().unwrap_or(0).max(header_width)
 }
 
 #[cfg(test)]
