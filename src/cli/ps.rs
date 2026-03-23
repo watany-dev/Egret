@@ -3,6 +3,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use serde::Serialize;
 
+use super::format::col_width;
 use super::{OutputFormat, PsArgs};
 use crate::container::{ContainerClient, ContainerInfo, ContainerRuntime, PortInfo};
 
@@ -121,11 +122,6 @@ fn format_table(containers: &[ContainerInfo]) -> String {
     output
 }
 
-/// Calculate column width: max(data widths, header width).
-fn col_width(data_widths: impl Iterator<Item = usize>, header_width: usize) -> usize {
-    data_widths.max().unwrap_or(0).max(header_width)
-}
-
 /// Format a single port mapping for display.
 fn format_port(port: &PortInfo) -> String {
     port.host_port.map_or_else(
@@ -173,24 +169,6 @@ fn format_duration_secs(total_secs: i64) -> String {
         format!("{mins}m{secs}s")
     } else {
         format!("{secs}s")
-    }
-}
-
-/// Format bytes as human-readable size.
-#[allow(clippy::cast_precision_loss)]
-pub fn format_bytes(bytes: u64) -> String {
-    const KIB: u64 = 1024;
-    const MIB: u64 = KIB * 1024;
-    const GIB: u64 = MIB * 1024;
-
-    if bytes >= GIB {
-        format!("{:.1} GiB", bytes as f64 / GIB as f64)
-    } else if bytes >= MIB {
-        format!("{:.1} MiB", bytes as f64 / MIB as f64)
-    } else if bytes >= KIB {
-        format!("{:.1} KiB", bytes as f64 / KIB as f64)
-    } else {
-        format!("{bytes} B")
     }
 }
 
@@ -385,14 +363,6 @@ mod tests {
     #[test]
     fn format_duration_secs_days() {
         assert_eq!(format_duration_secs(90000), "1d1h");
-    }
-
-    #[test]
-    fn format_bytes_values() {
-        assert_eq!(format_bytes(500), "500 B");
-        assert_eq!(format_bytes(1536), "1.5 KiB");
-        assert_eq!(format_bytes(1_572_864), "1.5 MiB");
-        assert_eq!(format_bytes(1_610_612_736), "1.5 GiB");
     }
 
     #[tokio::test]

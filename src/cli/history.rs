@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::HistoryArgs;
+use super::format::col_width;
 use crate::history::{self, HistoryEntry};
 
 /// Execute the `history` subcommand.
@@ -94,11 +95,6 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{secs}s")
     }
-}
-
-/// Calculate column width.
-fn col_width(data_widths: impl Iterator<Item = usize>, header_width: usize) -> usize {
-    data_widths.max().unwrap_or(0).max(header_width)
 }
 
 #[cfg(test)]

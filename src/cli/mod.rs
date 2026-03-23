@@ -2,6 +2,7 @@
 
 pub mod completions;
 pub mod diff;
+pub mod format;
 pub mod history;
 pub mod init;
 pub mod inspect;
