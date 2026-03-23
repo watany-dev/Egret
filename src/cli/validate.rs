@@ -15,15 +15,9 @@ use super::ValidateArgs;
 #[allow(clippy::print_stdout)]
 pub fn execute(args: &ValidateArgs) -> Result<()> {
     // Resolve profile paths
-    let base_dir = args
-        .task_definition
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let config = profile::load_config_with_warning(base_dir);
-    let effective_profile = profile::effective_profile(args.profile.as_deref(), config.as_ref());
-    let resolved = profile::resolve(
-        base_dir,
-        effective_profile,
+    let resolved = profile::resolve_from_args(
+        &args.task_definition,
+        args.profile.as_deref(),
         args.r#override.as_deref(),
         args.secrets.as_deref(),
     )?;

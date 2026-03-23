@@ -197,6 +197,26 @@ pub fn resolve(
     })
 }
 
+/// Convenience wrapper that combines config loading, profile resolution, and path resolution.
+///
+/// This encapsulates the common pattern used by CLI commands that accept
+/// `--profile`, `--override`, and `--secrets` flags alongside a task definition path.
+///
+/// # Errors
+///
+/// Returns `ProfileError::InvalidProfileName` if the resolved profile name is invalid.
+pub fn resolve_from_args(
+    task_definition: &Path,
+    profile: Option<&str>,
+    explicit_override: Option<&Path>,
+    explicit_secrets: Option<&Path>,
+) -> Result<ResolvedPaths, ProfileError> {
+    let base_dir = task_definition.parent().unwrap_or_else(|| Path::new("."));
+    let config = load_config_with_warning(base_dir);
+    let effective = effective_profile(profile, config.as_ref());
+    resolve(base_dir, effective, explicit_override, explicit_secrets)
+}
+
 /// Load `.lecs.toml` config from `base_dir` (searching upward), logging a warning on errors.
 ///
 /// Returns `None` if no config file is found or if loading/parsing fails.
@@ -565,5 +585,37 @@ mod tests {
     fn resolve_rejects_slash_in_profile() {
         let result = resolve(Path::new("/project"), Some("foo/bar"), None, None);
         assert!(result.is_err());
+    }
+
+    // ── resolve_from_args tests ──
+
+    #[test]
+    fn resolve_from_args_uses_task_def_parent_as_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let override_file = dir.path().join("lecs-override.dev.json");
+        std::fs::write(&override_file, "{}").unwrap();
+
+        let task_def_path = dir.path().join("task-definition.json");
+        let resolved = resolve_from_args(&task_def_path, Some("dev"), None, None).unwrap();
+        assert_eq!(resolved.override_path, Some(override_file));
+    }
+
+    #[test]
+    fn resolve_from_args_explicit_flags_take_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_def_path = dir.path().join("task-definition.json");
+        let explicit = Path::new("custom.json");
+        let resolved =
+            resolve_from_args(&task_def_path, Some("dev"), Some(explicit), None).unwrap();
+        assert_eq!(resolved.override_path, Some(PathBuf::from("custom.json")));
+    }
+
+    #[test]
+    fn resolve_from_args_no_profile_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_def_path = dir.path().join("task-definition.json");
+        let resolved = resolve_from_args(&task_def_path, None, None, None).unwrap();
+        assert!(resolved.override_path.is_none());
+        assert!(resolved.secrets_path.is_none());
     }
 }

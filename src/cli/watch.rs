@@ -53,7 +53,6 @@ pub fn validate_watch_paths(paths: &[PathBuf]) -> Result<()> {
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout, clippy::too_many_lines)]
 pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
-    use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -63,16 +62,9 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
     use crate::events::{EventSink, NdjsonEventSink, NullEventSink};
     use crate::profile;
 
-    let base_dir = args
-        .task_definition
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let config = profile::load_config_with_warning(base_dir);
-    let effective_profile = profile::effective_profile(args.profile.as_deref(), config.as_ref());
-
-    let resolved = profile::resolve(
-        base_dir,
-        effective_profile,
+    let resolved = profile::resolve_from_args(
+        &args.task_definition,
+        args.profile.as_deref(),
         args.r#override.as_deref(),
         args.secrets.as_deref(),
     )?;
@@ -122,14 +114,13 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
     );
 
     // Initial run
-    let mut state =
-        match load_and_run_task(args, base_dir, effective_profile, &client, &*event_sink).await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(error = %e, "Initial task startup failed");
-                return Err(e);
-            }
-        };
+    let mut state = match load_and_run_task(args, &client, &*event_sink).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "Initial task startup failed");
+            return Err(e);
+        }
+    };
 
     println!("Task started. Watching for changes...");
 
@@ -157,7 +148,7 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
                 )
                 .await;
 
-                match load_and_run_task(args, base_dir, effective_profile, &client, &*event_sink).await {
+                match load_and_run_task(args, &client, &*event_sink).await {
                     Ok(new_state) => {
                         state = new_state;
                         println!("Task restarted. Watching for changes...");
@@ -197,8 +188,6 @@ struct WatchTaskState {
 #[cfg(not(tarpaulin_include))]
 async fn load_and_run_task(
     args: &WatchArgs,
-    base_dir: &std::path::Path,
-    effective_profile: Option<&str>,
     client: &crate::container::ContainerClient,
     event_sink: &dyn crate::events::EventSink,
 ) -> Result<WatchTaskState> {
@@ -206,9 +195,9 @@ async fn load_and_run_task(
     use crate::secrets::SecretsResolver;
     use crate::taskdef::{Environment, TaskDefinition};
 
-    let resolved = crate::profile::resolve(
-        base_dir,
-        effective_profile,
+    let resolved = crate::profile::resolve_from_args(
+        &args.task_definition,
+        args.profile.as_deref(),
         args.r#override.as_deref(),
         args.secrets.as_deref(),
     )?;
