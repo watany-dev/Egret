@@ -23,7 +23,7 @@ pub async fn execute_with_client(
     let containers = client.list_containers(task_filter).await?;
 
     if containers.is_empty() {
-        println!("No egret containers found.");
+        println!("No lecs containers found.");
         return Ok(());
     }
 

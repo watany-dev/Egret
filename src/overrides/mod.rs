@@ -21,7 +21,7 @@ pub enum OverrideError {
     ParseJson(#[from] serde_json::Error),
 }
 
-/// Top-level override configuration (`egret-override.json`).
+/// Top-level override configuration (`lecs-override.json`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverrideConfig {

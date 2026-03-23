@@ -13,7 +13,7 @@ pub async fn execute(args: &LogsArgs, host: Option<&str>) -> Result<()> {
 
     let container = find_container(&containers, &args.container).map_err(|e| match e {
         FindContainerError::NotFound => anyhow::anyhow!(
-            "No container found matching '{}'. Use 'egret ps' to list running containers.",
+            "No container found matching '{}'. Use 'lecs ps' to list running containers.",
             args.container
         ),
         FindContainerError::Ambiguous(names) => anyhow::anyhow!(

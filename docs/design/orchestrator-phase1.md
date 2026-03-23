@@ -2,7 +2,7 @@
 
 ## 概要
 
-`egret run` および `egret stop` コマンドのコンテナライフサイクル管理を定義する。
+`lecs run` および `lecs stop` コマンドのコンテナライフサイクル管理を定義する。
 Phase 1 では dependsOn DAG やヘルスチェックは対象外とし、全コンテナの並行起動・停止に限定する。
 
 ## モジュール配置方針
@@ -11,8 +11,8 @@ Phase 1 のライフサイクルロジックは以下のように配置する:
 
 | ファイル | 責務 |
 |---------|------|
-| `src/cli/run.rs` | `egret run` のエントリポイント。パース → ランタイム接続 → 起動 → ログ → クリーンアップの全体フロー |
-| `src/cli/stop.rs` | `egret stop` のエントリポイント。ラベル検索 → 停止 → 削除のフロー |
+| `src/cli/run.rs` | `lecs run` のエントリポイント。パース → ランタイム接続 → 起動 → ログ → クリーンアップの全体フロー |
+| `src/cli/stop.rs` | `lecs stop` のエントリポイント。ラベル検索 → 停止 → 削除のフロー |
 | `src/container/mod.rs` | コンテナランタイム API 操作のみ（設計書: `container.md`）|
 | `src/taskdef/mod.rs` | JSON パースのみ（設計書: `taskdef.md`）|
 
@@ -61,10 +61,10 @@ async fn main() -> Result<()> {
 - `cli::run::execute` と `cli::stop::execute` に `host` パラメータを渡す
 - `cli.host.as_deref()` で `Option<String>` → `Option<&str>` 変換
 
-## `egret run` フロー
+## `lecs run` フロー
 
 ```
-egret run -f task-def.json
+lecs run -f task-def.json
          │
          ▼
 ┌─────────────────────┐
@@ -81,7 +81,7 @@ egret run -f task-def.json
           ▼
 ┌─────────────────────┐
 │ 3. ネットワーク作成  │  ContainerClient::create_network()
-│    egret-<family>    │
+│    lecs-<family>    │
 └─────────┬───────────┘
           │
           ▼
@@ -105,7 +105,7 @@ egret run -f task-def.json
 └─────────────────────┘
 ```
 
-### `egret run` 実装
+### `lecs run` 実装
 
 ```rust
 // src/cli/run.rs
@@ -174,9 +174,9 @@ fn build_container_config(
     metadata_port: Option<u16>,  // Phase 3 で追加
 ) -> ContainerConfig {
     let labels = HashMap::from([
-        ("egret.managed".into(), "true".into()),
-        ("egret.task".into(), family.into()),
-        ("egret.container".into(), def.name.clone()),
+        ("lecs.managed".into(), "true".into()),
+        ("lecs.task".into(), family.into()),
+        ("lecs.container".into(), def.name.clone()),
     ]);
 
     let mut env: Vec<String> = def
@@ -278,10 +278,10 @@ async fn stream_logs_until_signal(
 }
 ```
 
-## `egret stop` フロー
+## `lecs stop` フロー
 
 ```
-egret stop [<task>] [--all]
+lecs stop [<task>] [--all]
          │
          ▼
 ┌──────────────────────────┐
@@ -290,9 +290,9 @@ egret stop [<task>] [--all]
           │
           ▼
 ┌──────────────────────────┐
-│ 2. Egret コンテナ検索     │  ラベル filter:
-│                          │  egret.managed=true
-│                          │  egret.task=<task> (指定時)
+│ 2. Lecs コンテナ検索     │  ラベル filter:
+│                          │  lecs.managed=true
+│                          │  lecs.task=<task> (指定時)
 └─────────┬────────────────┘
           │
           ▼
@@ -311,7 +311,7 @@ egret stop [<task>] [--all]
 └──────────────────────────┘
 ```
 
-### `egret stop` 実装
+### `lecs stop` 実装
 
 ```rust
 // src/cli/stop.rs

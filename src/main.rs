@@ -1,4 +1,4 @@
-//! Egret - Local ECS task runner.
+//! Lecs - Local ECS task runner.
 //!
 //! Run ECS task definitions locally by satisfying the runtime contract
 //! ECS apps expect (metadata endpoints, credential providers, dependsOn,

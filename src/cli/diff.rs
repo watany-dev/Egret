@@ -1,4 +1,4 @@
-//! `egret diff` command implementation.
+//! `lecs diff` command implementation.
 //!
 //! Provides semantic comparison of two ECS task definition files,
 //! showing differences at the container, environment variable, and port level.

@@ -18,9 +18,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// Egret - Local ECS task runner
+/// Lecs - Local ECS task runner
 #[derive(Parser)]
-#[command(name = "egret", about = "Run ECS task definitions locally")]
+#[command(name = "lecs", about = "Run ECS task definitions locally")]
 pub struct Cli {
     /// Container runtime socket URL (e.g., `unix:///run/podman/podman.sock`)
     #[arg(long, global = true, env = "CONTAINER_HOST")]
@@ -40,7 +40,7 @@ pub enum Command {
     Ps(PsArgs),
     /// Show logs for a container
     Logs(LogsArgs),
-    /// Generate starter files for a new Egret project
+    /// Generate starter files for a new Lecs project
     Init(InitArgs),
     /// Validate task definition and related files
     Validate(ValidateArgs),
@@ -245,13 +245,13 @@ mod tests {
 
     #[test]
     fn parse_version_command() {
-        let cli = Cli::try_parse_from(["egret", "version"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "version"]).expect("should parse");
         assert!(matches!(cli.command, Command::Version));
     }
 
     #[test]
     fn parse_run_command() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn parse_run_with_events() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--events"])
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--events"])
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn parse_run_without_events() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
                 assert!(!args.events);
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn parse_run_with_override_and_secrets() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "run",
             "-f",
             "task.json",
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn parse_run_with_host_flag() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "--host",
             "unix:///run/podman/podman.sock",
             "run",
@@ -330,14 +330,14 @@ mod tests {
 
     #[test]
     fn parse_host_flag_is_optional() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         assert!(cli.host.is_none());
     }
 
     #[test]
     fn parse_host_with_tcp() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "--host",
             "tcp://localhost:2375",
             "run",
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn parse_stop_all() {
-        let cli = Cli::try_parse_from(["egret", "stop", "--all"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "stop", "--all"]).expect("should parse");
         match cli.command {
             Command::Stop(args) => {
                 assert!(args.all);
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn parse_ps_no_args() {
-        let cli = Cli::try_parse_from(["egret", "ps"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "ps"]).expect("should parse");
         match cli.command {
             Command::Ps(args) => {
                 assert!(args.task.is_none());
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn parse_ps_with_task_filter() {
-        let cli = Cli::try_parse_from(["egret", "ps", "my-app"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "ps", "my-app"]).expect("should parse");
         match cli.command {
             Command::Ps(args) => {
                 assert_eq!(args.task.as_deref(), Some("my-app"));
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn parse_ps_with_json_output() {
-        let cli = Cli::try_parse_from(["egret", "ps", "--output", "json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "ps", "--output", "json"]).expect("should parse");
         match cli.command {
             Command::Ps(args) => {
                 assert!(matches!(args.output, OutputFormat::Json));
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn parse_logs_command() {
-        let cli = Cli::try_parse_from(["egret", "logs", "app"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "logs", "app"]).expect("should parse");
         match cli.command {
             Command::Logs(args) => {
                 assert_eq!(args.container, "app");
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn parse_logs_with_follow() {
-        let cli = Cli::try_parse_from(["egret", "logs", "app", "--follow"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "logs", "app", "--follow"]).expect("should parse");
         match cli.command {
             Command::Logs(args) => {
                 assert_eq!(args.container, "app");
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn parse_logs_with_short_follow() {
-        let cli = Cli::try_parse_from(["egret", "logs", "app", "-f"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "logs", "app", "-f"]).expect("should parse");
         match cli.command {
             Command::Logs(args) => {
                 assert_eq!(args.container, "app");
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn parse_validate_command() {
         let cli =
-            Cli::try_parse_from(["egret", "validate", "-f", "task.json"]).expect("should parse");
+            Cli::try_parse_from(["lecs", "validate", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Validate(args) => {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn parse_validate_with_override() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "validate",
             "-f",
             "task.json",
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn parse_validate_with_secrets() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "validate",
             "-f",
             "task.json",
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn parse_inspect_command() {
-        let cli = Cli::try_parse_from(["egret", "inspect", "my-app"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "inspect", "my-app"]).expect("should parse");
         match cli.command {
             Command::Inspect(args) => {
                 assert_eq!(args.family, "my-app");
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn parse_stats_command_defaults() {
-        let cli = Cli::try_parse_from(["egret", "stats"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "stats"]).expect("should parse");
         match cli.command {
             Command::Stats(args) => {
                 assert!(args.family.is_none());
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn parse_stats_with_family() {
-        let cli = Cli::try_parse_from(["egret", "stats", "my-app"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "stats", "my-app"]).expect("should parse");
         match cli.command {
             Command::Stats(args) => {
                 assert_eq!(args.family.as_deref(), Some("my-app"));
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn parse_history_command() {
-        let cli = Cli::try_parse_from(["egret", "history"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "history"]).expect("should parse");
         match cli.command {
             Command::History(args) => {
                 assert!(!args.clear);
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn parse_history_with_clear() {
-        let cli = Cli::try_parse_from(["egret", "history", "--clear"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "history", "--clear"]).expect("should parse");
         match cli.command {
             Command::History(args) => {
                 assert!(args.clear);
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn parse_diff_command() {
-        let cli = Cli::try_parse_from(["egret", "diff", "a.json", "b.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "diff", "a.json", "b.json"]).expect("should parse");
         match cli.command {
             Command::Diff(args) => {
                 assert_eq!(args.file1.to_str(), Some("a.json"));
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn parse_diff_with_no_color() {
-        let cli = Cli::try_parse_from(["egret", "diff", "--no-color", "a.json", "b.json"])
+        let cli = Cli::try_parse_from(["lecs", "diff", "--no-color", "a.json", "b.json"])
             .expect("should parse");
         match cli.command {
             Command::Diff(args) => {
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn parse_completions_bash() {
-        let cli = Cli::try_parse_from(["egret", "completions", "bash"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "completions", "bash"]).expect("should parse");
         match cli.command {
             Command::Completions(args) => {
                 assert_eq!(args.shell, clap_complete::Shell::Bash);
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn parse_completions_zsh() {
-        let cli = Cli::try_parse_from(["egret", "completions", "zsh"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "completions", "zsh"]).expect("should parse");
         match cli.command {
             Command::Completions(args) => {
                 assert_eq!(args.shell, clap_complete::Shell::Zsh);
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn parse_completions_fish() {
-        let cli = Cli::try_parse_from(["egret", "completions", "fish"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "completions", "fish"]).expect("should parse");
         match cli.command {
             Command::Completions(args) => {
                 assert_eq!(args.shell, clap_complete::Shell::Fish);
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn parse_init_command_defaults() {
-        let cli = Cli::try_parse_from(["egret", "init"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "init"]).expect("should parse");
         match cli.command {
             Command::Init(args) => {
                 assert_eq!(args.dir.to_str(), Some("."));
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn parse_run_with_profile() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "--profile", "dev"])
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--profile", "dev"])
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn parse_run_with_short_profile() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json", "-p", "staging"])
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "-p", "staging"])
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn parse_run_profile_with_override() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "run",
             "-f",
             "task.json",
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn parse_run_without_profile() {
-        let cli = Cli::try_parse_from(["egret", "run", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
                 assert!(args.profile.is_none());
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn parse_validate_with_profile() {
-        let cli = Cli::try_parse_from(["egret", "validate", "-f", "task.json", "--profile", "dev"])
+        let cli = Cli::try_parse_from(["lecs", "validate", "-f", "task.json", "--profile", "dev"])
             .expect("should parse");
         match cli.command {
             Command::Validate(args) => {
@@ -689,7 +689,7 @@ mod tests {
     #[test]
     fn parse_init_with_flags() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "init",
             "--image",
             "node:20",
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn parse_watch_command() {
-        let cli = Cli::try_parse_from(["egret", "watch", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "watch", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Watch(args) => {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn parse_watch_with_debounce() {
-        let cli = Cli::try_parse_from(["egret", "watch", "-f", "task.json", "--debounce", "1000"])
+        let cli = Cli::try_parse_from(["lecs", "watch", "-f", "task.json", "--debounce", "1000"])
             .expect("should parse");
         match cli.command {
             Command::Watch(args) => {
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn parse_watch_with_watch_paths() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "watch",
             "-f",
             "task.json",

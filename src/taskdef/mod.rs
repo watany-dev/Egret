@@ -1017,7 +1017,7 @@ mod tests {
 
     #[test]
     fn from_file_reads_valid_json() {
-        let dir = std::env::temp_dir().join("egret-test-taskdef");
+        let dir = std::env::temp_dir().join("lecs-test-taskdef");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("valid.json");
         std::fs::write(

@@ -1,7 +1,7 @@
 //! Profile resolution for convention-based override and secrets file loading.
 //!
-//! Resolves `--profile <name>` to `egret-override.<name>.json` and `secrets.<name>.json`
-//! paths, with optional `.egret.toml` configuration for default profiles.
+//! Resolves `--profile <name>` to `lecs-override.<name>.json` and `secrets.<name>.json`
+//! paths, with optional `.lecs.toml` configuration for default profiles.
 
 use std::path::{Path, PathBuf};
 
@@ -34,9 +34,9 @@ pub enum ProfileError {
     },
 }
 
-/// Parsed `.egret.toml` configuration.
+/// Parsed `.lecs.toml` configuration.
 #[derive(Debug, Default, serde::Deserialize)]
-pub struct EgretConfig {
+pub struct LecsConfig {
     /// Default profile name (e.g., `"dev"`).
     pub default_profile: Option<String>,
 }
@@ -53,7 +53,7 @@ pub struct ResolvedPaths {
     pub secrets_path: Option<PathBuf>,
 }
 
-impl EgretConfig {
+impl LecsConfig {
     /// Load configuration from a file path.
     ///
     /// # Errors
@@ -103,9 +103,9 @@ pub fn validate_profile_name(name: &str) -> Result<(), ProfileError> {
     Ok(())
 }
 
-/// Search for `.egret.toml` starting from `start_dir` and walking up parent directories.
+/// Search for `.lecs.toml` starting from `start_dir` and walking up parent directories.
 ///
-/// Returns the path to the first `.egret.toml` found, or `None` if not found.
+/// Returns the path to the first `.lecs.toml` found, or `None` if not found.
 #[must_use]
 pub fn find_config(start_dir: &Path) -> Option<PathBuf> {
     let mut current = if start_dir.as_os_str().is_empty() {
@@ -115,7 +115,7 @@ pub fn find_config(start_dir: &Path) -> Option<PathBuf> {
     };
 
     loop {
-        let candidate = current.join(".egret.toml");
+        let candidate = current.join(".lecs.toml");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -127,10 +127,10 @@ pub fn find_config(start_dir: &Path) -> Option<PathBuf> {
 
 /// Build the conventional override file path for a profile.
 ///
-/// Returns `base_dir/egret-override.<profile>.json`.
+/// Returns `base_dir/lecs-override.<profile>.json`.
 #[must_use]
 pub fn profile_override_path(base_dir: &Path, profile: &str) -> PathBuf {
-    base_dir.join(format!("egret-override.{profile}.json"))
+    base_dir.join(format!("lecs-override.{profile}.json"))
 }
 
 /// Build the conventional secrets file path for a profile.
@@ -197,32 +197,32 @@ pub fn resolve(
     })
 }
 
-/// Load `.egret.toml` config from `base_dir` (searching upward), logging a warning on errors.
+/// Load `.lecs.toml` config from `base_dir` (searching upward), logging a warning on errors.
 ///
 /// Returns `None` if no config file is found or if loading/parsing fails.
 #[must_use]
-pub fn load_config_with_warning(base_dir: &Path) -> Option<EgretConfig> {
+pub fn load_config_with_warning(base_dir: &Path) -> Option<LecsConfig> {
     let config_path = find_config(base_dir)?;
-    match EgretConfig::from_file(&config_path) {
+    match LecsConfig::from_file(&config_path) {
         Ok(config) => Some(config),
         Err(err) => {
             tracing::warn!(
                 path = %config_path.display(),
                 error = %err,
-                "Failed to load .egret.toml; ignoring"
+                "Failed to load .lecs.toml; ignoring"
             );
             None
         }
     }
 }
 
-/// Determine the effective profile name from CLI arg and `.egret.toml` default.
+/// Determine the effective profile name from CLI arg and `.lecs.toml` default.
 ///
-/// Priority: explicit CLI `--profile` > `.egret.toml` `default_profile` > `None`.
+/// Priority: explicit CLI `--profile` > `.lecs.toml` `default_profile` > `None`.
 #[must_use]
 pub fn effective_profile<'a>(
     cli_profile: Option<&'a str>,
-    config: Option<&'a EgretConfig>,
+    config: Option<&'a LecsConfig>,
 ) -> Option<&'a str> {
     cli_profile.or_else(|| config.as_ref().and_then(|c| c.default_profile.as_deref()))
 }
@@ -232,24 +232,24 @@ pub fn effective_profile<'a>(
 mod tests {
     use super::*;
 
-    // ── EgretConfig parsing tests ──
+    // ── LecsConfig parsing tests ──
 
     #[test]
     fn parse_config_with_defaults() {
         let toml_str = r#"default_profile = "dev""#;
-        let config = EgretConfig::from_toml(toml_str, Path::new("test.toml")).unwrap();
+        let config = LecsConfig::from_toml(toml_str, Path::new("test.toml")).unwrap();
         assert_eq!(config.default_profile.as_deref(), Some("dev"));
     }
 
     #[test]
     fn parse_config_empty() {
-        let config = EgretConfig::from_toml("", Path::new("test.toml")).unwrap();
+        let config = LecsConfig::from_toml("", Path::new("test.toml")).unwrap();
         assert!(config.default_profile.is_none());
     }
 
     #[test]
     fn parse_config_invalid_toml() {
-        let result = EgretConfig::from_toml("not valid toml [[[", Path::new("test.toml"));
+        let result = LecsConfig::from_toml("not valid toml [[[", Path::new("test.toml"));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("test.toml"));
@@ -262,28 +262,28 @@ mod tests {
             unknown_field = "value"
         "#;
         // serde default behavior ignores unknown fields
-        let config = EgretConfig::from_toml(toml_str, Path::new("test.toml")).unwrap();
+        let config = LecsConfig::from_toml(toml_str, Path::new("test.toml")).unwrap();
         assert_eq!(config.default_profile.as_deref(), Some("staging"));
     }
 
-    // ── EgretConfig::from_file tests ──
+    // ── LecsConfig::from_file tests ──
 
     #[test]
     fn parse_config_from_file() {
         let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join(".egret.toml");
+        let config_path = dir.path().join(".lecs.toml");
         std::fs::write(&config_path, r#"default_profile = "prod""#).unwrap();
 
-        let config = EgretConfig::from_file(&config_path).unwrap();
+        let config = LecsConfig::from_file(&config_path).unwrap();
         assert_eq!(config.default_profile.as_deref(), Some("prod"));
     }
 
     #[test]
     fn parse_config_file_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let missing_path = dir.path().join(".egret.toml");
+        let missing_path = dir.path().join(".lecs.toml");
 
-        let result = EgretConfig::from_file(&missing_path);
+        let result = LecsConfig::from_file(&missing_path);
         assert!(result.is_err());
         let err = result.unwrap_err();
         let missing_path_str = missing_path.to_string_lossy();
@@ -295,23 +295,23 @@ mod tests {
     #[test]
     fn error_display_read_config() {
         let err = ProfileError::ReadConfig {
-            path: PathBuf::from("/foo/.egret.toml"),
+            path: PathBuf::from("/foo/.lecs.toml"),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
         };
         let msg = err.to_string();
-        assert!(msg.contains("/foo/.egret.toml"));
+        assert!(msg.contains("/foo/.lecs.toml"));
         assert!(msg.contains("not found"));
     }
 
     #[test]
     fn error_display_parse_config() {
-        let toml_err = toml::from_str::<EgretConfig>("invalid [[[").unwrap_err();
+        let toml_err = toml::from_str::<LecsConfig>("invalid [[[").unwrap_err();
         let err = ProfileError::ParseConfig {
-            path: PathBuf::from("/bar/.egret.toml"),
+            path: PathBuf::from("/bar/.lecs.toml"),
             source: toml_err,
         };
         let msg = err.to_string();
-        assert!(msg.contains("/bar/.egret.toml"));
+        assert!(msg.contains("/bar/.lecs.toml"));
     }
 
     // ── Convention path builder tests ──
@@ -319,13 +319,13 @@ mod tests {
     #[test]
     fn profile_override_path_dev() {
         let path = profile_override_path(Path::new("/project"), "dev");
-        assert_eq!(path, PathBuf::from("/project/egret-override.dev.json"));
+        assert_eq!(path, PathBuf::from("/project/lecs-override.dev.json"));
     }
 
     #[test]
     fn profile_override_path_staging() {
         let path = profile_override_path(Path::new("/project"), "staging");
-        assert_eq!(path, PathBuf::from("/project/egret-override.staging.json"));
+        assert_eq!(path, PathBuf::from("/project/lecs-override.staging.json"));
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn find_config_in_current_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join(".egret.toml");
+        let config_path = dir.path().join(".lecs.toml");
         std::fs::write(&config_path, "").unwrap();
 
         let found = find_config(dir.path());
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn find_config_in_parent_dir() {
         let parent = tempfile::tempdir().unwrap();
-        let config_path = parent.path().join(".egret.toml");
+        let config_path = parent.path().join(".lecs.toml");
         std::fs::write(&config_path, "").unwrap();
 
         let child = parent.path().join("subdir");
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn find_config_in_grandparent_dir() {
         let root = tempfile::tempdir().unwrap();
-        let config_path = root.path().join(".egret.toml");
+        let config_path = root.path().join(".lecs.toml");
         std::fs::write(&config_path, "").unwrap();
 
         let child = root.path().join("a").join("b");
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn effective_profile_cli_takes_precedence() {
-        let config = EgretConfig {
+        let config = LecsConfig {
             default_profile: Some("from-config".to_string()),
         };
         assert_eq!(
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn effective_profile_falls_back_to_config() {
-        let config = EgretConfig {
+        let config = LecsConfig {
             default_profile: Some("from-config".to_string()),
         };
         assert_eq!(effective_profile(None, Some(&config)), Some("from-config"));
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn effective_profile_none_when_both_absent() {
-        let config = EgretConfig {
+        let config = LecsConfig {
             default_profile: None,
         };
         assert_eq!(effective_profile(None, Some(&config)), None);
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn resolve_profile_sets_convention_paths_when_files_exist() {
         let dir = tempfile::tempdir().unwrap();
-        let override_file = dir.path().join("egret-override.dev.json");
+        let override_file = dir.path().join("lecs-override.dev.json");
         let secrets_file = dir.path().join("secrets.dev.json");
         std::fs::write(&override_file, "{}").unwrap();
         std::fs::write(&secrets_file, "{}").unwrap();
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn resolve_explicit_secrets_takes_precedence() {
         let dir = tempfile::tempdir().unwrap();
-        let override_file = dir.path().join("egret-override.dev.json");
+        let override_file = dir.path().join("lecs-override.dev.json");
         std::fs::write(&override_file, "{}").unwrap();
 
         let explicit = Path::new("custom-secrets.json");
@@ -536,7 +536,7 @@ mod tests {
     fn resolve_partial_files_exist() {
         let dir = tempfile::tempdir().unwrap();
         // Only override file exists, no secrets file
-        let override_file = dir.path().join("egret-override.dev.json");
+        let override_file = dir.path().join("lecs-override.dev.json");
         std::fs::write(&override_file, "{}").unwrap();
 
         let resolved = resolve(dir.path(), Some("dev"), None, None).unwrap();

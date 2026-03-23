@@ -8,7 +8,7 @@ bollard クレートを通じて OCI 互換コンテナランタイム（Docker 
 
 ## 設計方針
 
-- bollard の API を薄くラップし、Egret 固有のロジック（ラベル管理、命名規則）をカプセル化
+- bollard の API を薄くラップし、Lecs 固有のロジック（ラベル管理、命名規則）をカプセル化
 - すべての操作は `async` で提供
 - Docker と Podman の両方をサポート（Podman は Docker 互換 API を提供）
 - ソケット接続は自動検出 + 明示指定の両方に対応
@@ -69,15 +69,15 @@ bollard `0.18` は本設計書作成時点（2026-03）の最新安定版。Dock
 
 ## ラベル戦略
 
-Egret が管理するリソースを識別するために、OCI ラベルを付与する:
+Lecs が管理するリソースを識別するために、OCI ラベルを付与する:
 
 | ラベルキー | 値 | 用途 |
 |---|---|---|
-| `egret.managed` | `"true"` | Egret が作成したリソースの識別 |
-| `egret.task` | `<family>` | タスクファミリー名 |
-| `egret.container` | `<container-name>` | コンテナ定義名（コンテナのみ） |
+| `lecs.managed` | `"true"` | Lecs が作成したリソースの識別 |
+| `lecs.task` | `<family>` | タスクファミリー名 |
+| `lecs.container` | `<container-name>` | コンテナ定義名（コンテナのみ） |
 
-ネットワークにも `egret.managed` と `egret.task` ラベルを付与する。
+ネットワークにも `lecs.managed` と `lecs.task` ラベルを付与する。
 
 ## 型定義
 
@@ -86,7 +86,7 @@ use std::collections::HashMap;
 
 use bollard::Docker;
 
-/// Egret 用コンテナランタイムクライアント
+/// Lecs 用コンテナランタイムクライアント
 pub struct ContainerClient {
     docker: Docker,
 }
@@ -133,19 +133,19 @@ pub struct PortMappingConfig {
     pub protocol: String,
 }
 
-/// Egret が管理するコンテナの情報
+/// Lecs が管理するコンテナの情報
 pub struct ContainerInfo {
     /// コンテナ ID
     pub id: String,
     /// コンテナ名
     pub name: String,
-    /// タスクファミリー名（egret.task ラベルの値）
+    /// タスクファミリー名（lecs.task ラベルの値）
     pub family: String,
     /// コンテナの状態（running, exited 等）
     pub state: String,
 }
 
-/// Egret が管理するネットワークの情報
+/// Lecs が管理するネットワークの情報
 pub struct NetworkInfo {
     /// ネットワーク ID
     pub id: String,
@@ -232,8 +232,8 @@ impl ContainerClient {
 
     // --- ネットワーク ---
 
-    /// Egret 専用ネットワークを作成する
-    /// ネットワーク名: `egret-<family>`
+    /// Lecs 専用ネットワークを作成する
+    /// ネットワーク名: `lecs-<family>`
     /// ドライバ: bridge（コンテナ名での DNS 解決が有効）
     /// 同名ネットワークが既存の場合はそのまま再利用する
     pub async fn create_network(
@@ -244,7 +244,7 @@ impl ContainerClient {
     /// ネットワークを削除する
     pub async fn remove_network(&self, name: &str) -> Result<(), ContainerError>;
 
-    /// Egret が管理するネットワーク一覧を取得する
+    /// Lecs が管理するネットワーク一覧を取得する
     /// task_filter: Some(<family>) で特定タスクに絞り込み、None で全て
     pub async fn list_networks(
         &self,
@@ -269,7 +269,7 @@ impl ContainerClient {
     /// コンテナを削除する
     pub async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
 
-    /// Egret が管理するコンテナ一覧を取得する
+    /// Lecs が管理するコンテナ一覧を取得する
     /// task_filter: Some(<family>) で特定タスクに絞り込み、None で全て
     pub async fn list_containers(
         &self,
@@ -306,7 +306,7 @@ fn build_bollard_config(config: &ContainerConfig) -> Config<String>;
 
 ```
 ┌─────────────────────────────────────────┐
-│        egret-<family> (bridge)          │
+│        lecs-<family> (bridge)          │
 │                                         │
 │  ┌───────────┐     ┌───────────┐       │
 │  │  app       │────▶│  redis    │       │
@@ -351,7 +351,7 @@ let networking_config = NetworkingConfig {
 
 | 項目 | 形式 | 例 |
 |---|---|---|
-| ネットワーク名 | `egret-<family>` | `egret-my-app` |
+| ネットワーク名 | `lecs-<family>` | `lecs-my-app` |
 | コンテナ名 | `<family>-<container_name>` | `my-app-app` |
 | ネットワークエイリアス | `<container_name>` | `app` |
 

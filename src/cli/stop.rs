@@ -27,7 +27,7 @@ pub async fn execute_with_client(
     // Stop and remove containers (best-effort)
     let containers = client.list_containers(task_filter).await?;
     if containers.is_empty() {
-        println!("No egret containers found.");
+        println!("No lecs containers found.");
         return Ok(());
     }
 
@@ -91,9 +91,7 @@ mod tests {
             )])])),
             stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
-            list_networks_results: Mutex::new(VecDeque::from([Ok(vec![network_info(
-                "egret-web",
-            )])])),
+            list_networks_results: Mutex::new(VecDeque::from([Ok(vec![network_info("lecs-web")])])),
             remove_network_results: Mutex::new(VecDeque::from([Ok(())])),
             ..MockContainerClient::new()
         };
@@ -191,7 +189,7 @@ mod tests {
             stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
             remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
             list_networks_results: Mutex::new(VecDeque::from([Ok(vec![network_info(
-                "egret-test",
+                "lecs-test",
             )])])),
             remove_network_results: Mutex::new(VecDeque::from([Err(
                 ContainerError::RuntimeNotRunning,

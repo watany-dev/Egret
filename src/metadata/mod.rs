@@ -137,7 +137,7 @@ pub struct NetworkMetadata {
 #[allow(dead_code)]
 pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
     let task_arn = format!(
-        "arn:aws:ecs:local:000000000000:task/egret/{}",
+        "arn:aws:ecs:local:000000000000:task/lecs/{}",
         task_def.family
     );
 
@@ -148,7 +148,7 @@ pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
         .collect();
 
     TaskMetadata {
-        cluster: "egret-local".to_string(),
+        cluster: "lecs-local".to_string(),
         task_arn,
         family: task_def.family.clone(),
         revision: "0".to_string(),
@@ -166,14 +166,14 @@ pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
 pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> ContainerMetadata {
     let docker_name = format!("{family}-{}", def.name);
     let container_arn = format!(
-        "arn:aws:ecs:local:000000000000:container/egret/{}/{}",
+        "arn:aws:ecs:local:000000000000:container/lecs/{}/{}",
         family, def.name
     );
 
     let labels = HashMap::from([
-        ("egret.managed".to_string(), "true".to_string()),
-        ("egret.task".to_string(), family.to_string()),
-        ("egret.container".to_string(), def.name.clone()),
+        ("lecs.managed".to_string(), "true".to_string()),
+        ("lecs.task".to_string(), family.to_string()),
+        ("lecs.container".to_string(), def.name.clone()),
     ]);
 
     let limits = match (def.cpu, def.memory) {
@@ -431,10 +431,10 @@ mod tests {
         let json = serde_json::to_value(&meta).expect("should serialize");
 
         // Verify PascalCase keys
-        assert_eq!(json["Cluster"], "egret-local");
+        assert_eq!(json["Cluster"], "lecs-local");
         assert_eq!(
             json["TaskARN"],
-            "arn:aws:ecs:local:000000000000:task/egret/my-app"
+            "arn:aws:ecs:local:000000000000:task/lecs/my-app"
         );
         assert_eq!(json["Family"], "my-app");
         assert_eq!(json["Revision"], "0");
@@ -478,7 +478,7 @@ mod tests {
         assert!(json.get("ImageID").is_some());
         assert_eq!(
             json["ContainerARN"],
-            "arn:aws:ecs:local:000000000000:container/egret/my-app/app"
+            "arn:aws:ecs:local:000000000000:container/lecs/my-app/app"
         );
         assert_eq!(json["Type"], "NORMAL");
         assert!(json.get("CreatedAt").is_some());
@@ -491,7 +491,7 @@ mod tests {
         let meta = build_task_metadata(&task_def);
 
         assert_eq!(meta.family, "my-app");
-        assert_eq!(meta.cluster, "egret-local");
+        assert_eq!(meta.cluster, "lecs-local");
         assert_eq!(
             meta.task_role_arn.as_deref(),
             Some("arn:aws:iam::123456789012:role/my-role")
@@ -725,7 +725,7 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let json: serde_json::Value = resp.json().await.expect("should parse json");
         assert_eq!(json["Family"], "my-app");
-        assert_eq!(json["Cluster"], "egret-local");
+        assert_eq!(json["Cluster"], "lecs-local");
         assert_eq!(
             json["Containers"]
                 .as_array()
