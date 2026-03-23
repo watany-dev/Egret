@@ -19,5 +19,8 @@ secrets*.json
 *.pem
 *.key
 
+# Test image build staging
+examples/test-image/.staging/
+
 # Claude Code local settings
 .claude/settings.local.json

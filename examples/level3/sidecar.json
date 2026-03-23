@@ -1,0 +1,69 @@
+{
+  "family": "smoke-sidecar",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/smoke-sidecar:1",
+  "revision": 1,
+  "status": "ACTIVE",
+  "compatibilities": ["EC2", "FARGATE"],
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "egret-test:latest",
+      "essential": true,
+      "cpu": 256,
+      "memory": 512,
+      "command": ["/bin/sh", "-c", "echo 'app running' && sleep 300"],
+      "portMappings": [],
+      "environment": [
+        { "name": "APP_NAME", "value": "smoke-sidecar" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/smoke-sidecar",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    },
+    {
+      "name": "sidecar",
+      "image": "egret-test:latest",
+      "essential": false,
+      "cpu": 64,
+      "memory": 128,
+      "command": ["/bin/sh", "-c", "echo 'sidecar running (essential=false)' && sleep 300"],
+      "dependsOn": [
+        { "containerName": "app", "condition": "START" }
+      ],
+      "environment": [
+        { "name": "ROLE", "value": "log-router" }
+      ],
+      "firelensConfiguration": {
+        "type": "fluentbit",
+        "options": {
+          "config-file-type": "file",
+          "config-file-value": "/fluent-bit/etc/extra.conf"
+        }
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/smoke-sidecar",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "sidecar"
+        }
+      }
+    }
+  ],
+  "volumes": [],
+  "placementConstraints": [],
+  "tags": [
+    { "key": "Pattern", "value": "sidecar" }
+  ]
+}

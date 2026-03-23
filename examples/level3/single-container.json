@@ -1,0 +1,36 @@
+{
+  "family": "smoke-single",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/smoke-single:1",
+  "revision": 1,
+  "status": "ACTIVE",
+  "registeredAt": "2024-06-01T00:00:00.000Z",
+  "compatibilities": ["EC2", "FARGATE"],
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "egret-test:latest",
+      "essential": true,
+      "cpu": 256,
+      "memory": 512,
+      "command": ["/bin/sh", "-c", "echo 'smoke-single running' && sleep 300"],
+      "portMappings": [],
+      "environment": [
+        { "name": "APP_NAME", "value": "smoke-single" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/smoke-single",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "volumes": [],
+  "placementConstraints": []
+}
