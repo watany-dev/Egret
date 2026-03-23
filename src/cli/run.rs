@@ -196,7 +196,9 @@ pub async fn run_task(
 
 /// Start the metadata/credentials sidecar server.
 #[cfg(not(tarpaulin_include))]
-async fn start_metadata_server(task_def: &TaskDefinition) -> Result<(MetadataServer, SharedState)> {
+pub(super) async fn start_metadata_server(
+    task_def: &TaskDefinition,
+) -> Result<(MetadataServer, SharedState)> {
     // Load AWS credentials (best-effort)
     let aws_creds = match credentials::load_local_credentials(task_def.task_role_arn.as_deref())
         .await

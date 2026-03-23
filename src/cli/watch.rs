@@ -8,14 +8,29 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 use super::WatchArgs;
+use crate::profile::ResolvedPaths;
 
 /// Collect all paths that should be watched for changes.
-pub fn collect_watch_paths(args: &WatchArgs) -> Vec<PathBuf> {
+///
+/// Includes the task definition, CLI-specified override/secrets, profile-resolved
+/// override/secrets (if different from CLI args), and any extra watch paths.
+pub fn collect_watch_paths(args: &WatchArgs, resolved: &ResolvedPaths) -> Vec<PathBuf> {
     let mut paths = vec![args.task_definition.clone()];
     if let Some(ref p) = args.r#override {
         paths.push(p.clone());
     }
     if let Some(ref p) = args.secrets {
+        paths.push(p.clone());
+    }
+    // Add profile-resolved paths that weren't already added via CLI flags
+    if let Some(ref p) = resolved.override_path
+        && !paths.contains(p)
+    {
+        paths.push(p.clone());
+    }
+    if let Some(ref p) = resolved.secrets_path
+        && !paths.contains(p)
+    {
         paths.push(p.clone());
     }
     for p in &args.watch_paths {
@@ -55,7 +70,14 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
     let config = profile::load_config_with_warning(base_dir);
     let effective_profile = profile::effective_profile(args.profile.as_deref(), config.as_ref());
 
-    let watch_paths = collect_watch_paths(args);
+    let resolved = profile::resolve(
+        base_dir,
+        effective_profile,
+        args.r#override.as_deref(),
+        args.secrets.as_deref(),
+    )?;
+
+    let watch_paths = collect_watch_paths(args, &resolved);
     validate_watch_paths(&watch_paths)?;
 
     let debounce = Duration::from_millis(args.debounce);
@@ -100,15 +122,14 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
     );
 
     // Initial run
-    let load_result =
-        load_and_run_task(args, base_dir, effective_profile, &client, &*event_sink).await;
-    let (mut network, mut containers) = match load_result {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!(error = %e, "Initial task startup failed");
-            return Err(e);
-        }
-    };
+    let mut state =
+        match load_and_run_task(args, base_dir, effective_profile, &client, &*event_sink).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "Initial task startup failed");
+                return Err(e);
+            }
+        };
 
     println!("Task started. Watching for changes...");
 
@@ -124,12 +145,21 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
                 while rx.try_recv().is_ok() {}
 
                 println!("\nFile change detected, restarting...");
-                super::run::cleanup(&*client, &containers, &network, &*event_sink, "watch").await;
+                if let Some(server) = state.metadata_server.take() {
+                    server.shutdown().await;
+                }
+                super::run::cleanup(
+                    &*client,
+                    &state.containers,
+                    &state.network,
+                    &*event_sink,
+                    &state.family,
+                )
+                .await;
 
                 match load_and_run_task(args, base_dir, effective_profile, &client, &*event_sink).await {
-                    Ok((new_network, new_containers)) => {
-                        network = new_network;
-                        containers = new_containers;
+                    Ok(new_state) => {
+                        state = new_state;
                         println!("Task restarted. Watching for changes...");
                     }
                     Err(e) => {
@@ -140,12 +170,30 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
         }
     }
 
-    super::run::cleanup(&*client, &containers, &network, &*event_sink, "watch").await;
+    if let Some(server) = state.metadata_server.take() {
+        server.shutdown().await;
+    }
+    super::run::cleanup(
+        &*client,
+        &state.containers,
+        &state.network,
+        &*event_sink,
+        &state.family,
+    )
+    .await;
     println!("Watch mode stopped.");
     Ok(())
 }
 
-/// Load task definition, apply overrides/secrets, and start containers.
+/// State of a running watch task (containers + optional metadata server).
+struct WatchTaskState {
+    network: String,
+    containers: Vec<(String, String)>,
+    family: String,
+    metadata_server: Option<crate::metadata::MetadataServer>,
+}
+
+/// Load task definition, apply overrides/secrets, start metadata server, and start containers.
 #[cfg(not(tarpaulin_include))]
 async fn load_and_run_task(
     args: &WatchArgs,
@@ -153,7 +201,7 @@ async fn load_and_run_task(
     effective_profile: Option<&str>,
     client: &crate::container::ContainerClient,
     event_sink: &dyn crate::events::EventSink,
-) -> Result<(String, Vec<(String, String)>)> {
+) -> Result<WatchTaskState> {
     use crate::overrides::OverrideConfig;
     use crate::secrets::SecretsResolver;
     use crate::taskdef::{Environment, TaskDefinition};
@@ -189,7 +237,49 @@ async fn load_and_run_task(
         tracing::warn!("Task definition has secrets but --secrets flag was not provided.");
     }
 
-    super::run::run_task(client, &task_def, None, None, event_sink).await
+    // Start metadata server if enabled (mirrors run::execute behavior)
+    let (metadata_server, metadata_state) = if args.no_metadata {
+        (None, None)
+    } else {
+        match super::run::start_metadata_server(&task_def).await {
+            Ok((server, state)) => (Some(server), Some(state)),
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to start metadata server, continuing without it");
+                (None, None)
+            }
+        }
+    };
+
+    let metadata_port = metadata_server.as_ref().map(|s| s.port);
+    let auth_token = if let Some(state) = &metadata_state {
+        Some(state.read().await.auth_token.clone())
+    } else {
+        None
+    };
+
+    let family = task_def.family.clone();
+    let (network, containers) = super::run::run_task(
+        client,
+        &task_def,
+        metadata_port,
+        auth_token.as_deref(),
+        event_sink,
+    )
+    .await?;
+
+    // Update container IDs in metadata server state
+    if let Some(state) = &metadata_state {
+        for (id, name) in &containers {
+            crate::metadata::update_container_id(state, name, id).await;
+        }
+    }
+
+    Ok(WatchTaskState {
+        network,
+        containers,
+        family,
+        metadata_server,
+    })
 }
 
 #[cfg(test)]
@@ -215,10 +305,17 @@ mod tests {
         }
     }
 
+    fn no_resolved() -> ResolvedPaths {
+        ResolvedPaths {
+            override_path: None,
+            secrets_path: None,
+        }
+    }
+
     #[test]
     fn collect_watch_paths_basic() {
         let args = make_watch_args(PathBuf::from("task.json"), None, None, vec![]);
-        let paths = collect_watch_paths(&args);
+        let paths = collect_watch_paths(&args, &no_resolved());
         assert_eq!(paths, vec![PathBuf::from("task.json")]);
     }
 
@@ -230,7 +327,7 @@ mod tests {
             Some(PathBuf::from("secrets.json")),
             vec![],
         );
-        let paths = collect_watch_paths(&args);
+        let paths = collect_watch_paths(&args, &no_resolved());
         assert_eq!(paths.len(), 3);
         assert_eq!(paths[0], PathBuf::from("task.json"));
         assert_eq!(paths[1], PathBuf::from("override.json"));
@@ -245,10 +342,43 @@ mod tests {
             None,
             vec![PathBuf::from("/app/src"), PathBuf::from("/app/config")],
         );
-        let paths = collect_watch_paths(&args);
+        let paths = collect_watch_paths(&args, &no_resolved());
         assert_eq!(paths.len(), 3);
         assert!(paths.contains(&PathBuf::from("/app/src")));
         assert!(paths.contains(&PathBuf::from("/app/config")));
+    }
+
+    #[test]
+    fn collect_watch_paths_with_profile_resolved() {
+        let args = make_watch_args(PathBuf::from("task.json"), None, None, vec![]);
+        let resolved = ResolvedPaths {
+            override_path: Some(PathBuf::from("egret-override.dev.json")),
+            secrets_path: Some(PathBuf::from("secrets.dev.json")),
+        };
+        let paths = collect_watch_paths(&args, &resolved);
+        assert_eq!(paths.len(), 3);
+        assert_eq!(paths[0], PathBuf::from("task.json"));
+        assert!(paths.contains(&PathBuf::from("egret-override.dev.json")));
+        assert!(paths.contains(&PathBuf::from("secrets.dev.json")));
+    }
+
+    #[test]
+    fn collect_watch_paths_profile_deduplicates_cli_args() {
+        // CLI flag and profile resolve to the same path — should not duplicate
+        let args = make_watch_args(
+            PathBuf::from("task.json"),
+            Some(PathBuf::from("override.json")),
+            None,
+            vec![],
+        );
+        let resolved = ResolvedPaths {
+            override_path: Some(PathBuf::from("override.json")),
+            secrets_path: None,
+        };
+        let paths = collect_watch_paths(&args, &resolved);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("task.json"));
+        assert_eq!(paths[1], PathBuf::from("override.json"));
     }
 
     #[test]
