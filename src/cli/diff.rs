@@ -17,7 +17,12 @@ use crate::taskdef::TaskDefinition;
 pub fn execute(args: &DiffArgs) -> Result<()> {
     let td1 = TaskDefinition::from_file(&args.file1)?;
     let td2 = TaskDefinition::from_file(&args.file2)?;
-    let output = diff_task_definitions(&td1, &td2);
+    let plain = diff_task_definitions(&td1, &td2);
+    let output = if args.no_color {
+        plain
+    } else {
+        colorize_diff(&plain)
+    };
     println!("{output}");
     Ok(())
 }
@@ -28,6 +33,49 @@ fn diff_from_json(json1: &str, json2: &str) -> Result<String> {
     let td1 = TaskDefinition::from_json(json1)?;
     let td2 = TaskDefinition::from_json(json2)?;
     Ok(diff_task_definitions(&td1, &td2))
+}
+
+// ANSI color codes
+const RESET: &str = "\x1b[0m";
+const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+const BOLD_RED: &str = "\x1b[1;31m";
+const BOLD_GREEN: &str = "\x1b[1;32m";
+const BOLD_CYAN: &str = "\x1b[1;36m";
+
+/// Apply ANSI colors to plain diff output.
+fn colorize_diff(plain: &str) -> String {
+    let mut output = String::with_capacity(plain.len() * 2);
+    for line in plain.lines() {
+        let trimmed = line.trim_start();
+        if line.starts_with("=== Container:") {
+            let color = if line.contains("(added)") {
+                BOLD_GREEN
+            } else if line.contains("(removed)") {
+                BOLD_RED
+            } else {
+                BOLD_CYAN
+            };
+            let _ = writeln!(output, "{color}{line}{RESET}");
+        } else if trimmed.starts_with("+ ") {
+            let _ = writeln!(output, "{GREEN}{line}{RESET}");
+        } else if trimmed.starts_with("- ") {
+            let _ = writeln!(output, "{RED}{line}{RESET}");
+        } else if trimmed.starts_with("~ ") || line.starts_with("family:") || line.contains(" → ")
+        {
+            let _ = writeln!(output, "{YELLOW}{line}{RESET}");
+        } else if line == "No differences found." {
+            let _ = writeln!(output, "{GREEN}{line}{RESET}");
+        } else {
+            let _ = writeln!(output, "{line}");
+        }
+    }
+    // Remove trailing newline to match plain text behavior
+    if output.ends_with('\n') {
+        output.pop();
+    }
+    output
 }
 
 /// Collect secret variable names from both task definitions.
@@ -1027,5 +1075,88 @@ mod tests {
         // UDP mapping removed, TCP mapping unchanged
         assert!(result.contains("- portMappings: 53:53/udp"));
         assert!(!result.contains("tcp"));
+    }
+
+    // --- colorize_diff tests ---
+
+    #[test]
+    fn colorize_addition() {
+        let input = "  + environment: NEW=val";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(GREEN));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_removal() {
+        let input = "  - environment: OLD=val";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(RED));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_change() {
+        let input = "  ~ environment: KEY: v1 → v2";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(YELLOW));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_header_added() {
+        let input = "=== Container: redis (added) ===";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(BOLD_GREEN));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_header_removed() {
+        let input = "=== Container: sidecar (removed) ===";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(BOLD_RED));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_header_modified() {
+        let input = "=== Container: app ===";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(BOLD_CYAN));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_family_change() {
+        let input = "family: app-v1 → app-v2";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(YELLOW));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_no_diff() {
+        let input = "No differences found.";
+        let result = colorize_diff(input);
+        assert!(result.starts_with(GREEN));
+        assert!(result.contains(input));
+        assert!(result.ends_with(RESET));
+    }
+
+    #[test]
+    fn colorize_plain_line_unchanged() {
+        let input = "  image: nginx:latest";
+        let result = colorize_diff(input);
+        // Plain lines should not have color codes
+        assert!(!result.contains("\x1b["));
+        assert_eq!(result, input);
     }
 }
