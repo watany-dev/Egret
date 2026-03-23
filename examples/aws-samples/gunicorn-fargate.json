@@ -1,0 +1,35 @@
+{  
+   "memory":"1024",
+   "networkMode":"awsvpc",
+   "cpu":"512",
+   "family":"gunicorn",
+   "requiresCompatibilities": [
+      "FARGATE"
+   ], 
+   "containerDefinitions":[  
+      {  
+         "portMappings":[  
+            {  
+               "hostPort":5000,
+               "containerPort":5000,
+               "protocol":"tcp"
+            }
+         ],
+         "essential":true,
+         "name":"gunicorn",
+         "environment":[  
+
+         ],
+         "image":"danriti/gunicorn-flask",
+         "logConfiguration":{  
+            "logDriver":"awslogs",
+            "options":{  
+               "awslogs-group":"/ecs/gunicorn",
+               "awslogs-region":"us-east-1",
+               "awslogs-stream-prefix":"ecs"
+            }
+         },
+         "memoryReservation":1024
+      }
+   ]
+}

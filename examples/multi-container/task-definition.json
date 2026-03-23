@@ -1,0 +1,120 @@
+{
+  "family": "multi-webapp",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "containerDefinitions": [
+    {
+      "name": "postgres",
+      "image": "postgres:16-alpine",
+      "essential": true,
+      "cpu": 256,
+      "memory": 512,
+      "portMappings": [
+        {
+          "containerPort": 5432,
+          "hostPort": 5432,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "POSTGRES_DB", "value": "appdb" },
+        { "name": "POSTGRES_USER", "value": "appuser" }
+      ],
+      "secrets": [
+        {
+          "name": "POSTGRES_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/db-password"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "pg_isready -U appuser -d appdb"],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 5,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/multi-webapp",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "postgres"
+        }
+      }
+    },
+    {
+      "name": "redis",
+      "image": "redis:7-alpine",
+      "essential": true,
+      "cpu": 128,
+      "memory": 256,
+      "portMappings": [
+        {
+          "containerPort": 6379,
+          "hostPort": 6379,
+          "protocol": "tcp"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "redis-cli ping | grep -q PONG"],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/multi-webapp",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "redis"
+        }
+      }
+    },
+    {
+      "name": "app",
+      "image": "nginx:alpine",
+      "essential": true,
+      "cpu": 512,
+      "memory": 1024,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "hostPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "APP_ENV", "value": "production" },
+        { "name": "DATABASE_URL", "value": "postgres://appuser:password@postgres:5432/appdb" },
+        { "name": "REDIS_URL", "value": "redis://redis:6379" }
+      ],
+      "dependsOn": [
+        { "containerName": "postgres", "condition": "HEALTHY" },
+        { "containerName": "redis", "condition": "HEALTHY" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/multi-webapp",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "app"
+        }
+      },
+      "dockerLabels": {
+        "com.example.app": "multi-webapp",
+        "com.example.tier": "frontend"
+      }
+    }
+  ],
+  "volumes": [],
+  "placementConstraints": [],
+  "tags": [
+    { "key": "Environment", "value": "production" },
+    { "key": "Team", "value": "platform" }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "family": "app-with-sidecar",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "nginx:alpine",
+      "essential": true,
+      "cpu": 256,
+      "memory": 512,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "hostPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "APP_NAME", "value": "my-service" },
+        { "name": "LOG_LEVEL", "value": "info" }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "app-logs",
+          "containerPath": "/var/log/app",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/app-with-sidecar",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    },
+    {
+      "name": "log-router",
+      "image": "busybox:latest",
+      "essential": false,
+      "cpu": 64,
+      "memory": 128,
+      "command": ["sh", "-c", "tail -f /var/log/app/*.log 2>/dev/null || sleep infinity"],
+      "dependsOn": [
+        { "containerName": "app", "condition": "START" }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "app-logs",
+          "containerPath": "/var/log/app",
+          "readOnly": true
+        }
+      ],
+      "firelensConfiguration": {
+        "type": "fluentbit",
+        "options": {
+          "config-file-type": "file",
+          "config-file-value": "/fluent-bit/etc/extra.conf"
+        }
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/app-with-sidecar",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "log-router"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "app-logs",
+      "host": {
+        "sourcePath": "/tmp/egret-app-logs"
+      }
+    }
+  ],
+  "placementConstraints": [],
+  "tags": [
+    { "key": "Pattern", "value": "sidecar" }
+  ]
+}

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check check clean coverage deny doc
+.PHONY: build test lint fmt fmt-check check clean coverage deny doc dog-routing
 
 build:
 	cargo build --release
@@ -30,6 +30,9 @@ doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
 check: fmt-check lint test doc deny
+
+dog-routing: build
+	./examples/run-smoke-test.sh
 
 clean:
 	cargo clean

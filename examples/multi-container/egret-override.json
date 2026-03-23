@@ -1,0 +1,11 @@
+{
+  "containerOverrides": {
+    "app": {
+      "environment": {
+        "APP_ENV": "local",
+        "DATABASE_URL": "postgres://appuser:localpass@postgres:5432/appdb",
+        "REDIS_URL": "redis://redis:6379"
+      }
+    }
+  }
+}
