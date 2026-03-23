@@ -14,6 +14,13 @@ lecs run -f task-definition.json
 # Run with local overrides and secrets
 lecs run -f task-definition.json --override lecs-override.json --secrets secrets.local.json
 
+# Run with a profile (loads lecs-override.dev.json + secrets.dev.json)
+lecs run -f task-definition.json --profile dev
+
+# Run from Terraform plan/state output
+lecs run --from-tf <(terraform show -json tfplan)
+lecs run --from-tf plan.json --tf-resource aws_ecs_task_definition.app
+
 # Run with a specific container runtime socket
 lecs run -f task-definition.json --host unix:///run/podman/podman.sock
 
@@ -25,6 +32,9 @@ lecs run -f task-definition.json --dry-run
 
 # Validate a task definition
 lecs validate -f task-definition.json
+
+# Validate from Terraform plan output
+lecs validate --from-tf plan.json
 
 # Generate starter files for a new project
 lecs init --dir my-project --image nginx:latest --family my-app
@@ -95,9 +105,12 @@ lecs run -f path/to/task-definition.json
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `-f, --task-definition` | — | Path to ECS task definition JSON (required) |
-| `--override` | — | Path to local override file (`lecs-override.json`) |
+| `-f, --task-definition` | — | Path to ECS task definition JSON (required unless `--from-tf`) |
+| `--from-tf` | — | Path to `terraform show -json` output (alternative to `-f`) |
+| `--tf-resource` | — | Terraform resource address (when plan has multiple ECS task definitions) |
+| `-o, --override` | — | Path to local override file (`lecs-override.json`) |
 | `-s, --secrets` | — | Path to local secrets mapping file (`secrets.local.json`) |
+| `-p, --profile` | — | Profile name for convention-based override/secrets resolution |
 | `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
 | `--dry-run` | — | Show resolved configuration without starting containers |
 | `--events` | — | Emit structured lifecycle events (NDJSON) to stderr |
@@ -124,7 +137,17 @@ Performs static analysis of task definition files, detecting errors before runti
 ```bash
 lecs validate -f task-definition.json
 lecs validate -f task-definition.json --override lecs-override.json --secrets secrets.local.json
+lecs validate --from-tf plan.json
 ```
+
+| Flag | Description |
+|------|-------------|
+| `-f, --task-definition` | Path to ECS task definition JSON (required unless `--from-tf`) |
+| `--from-tf` | Path to `terraform show -json` output (alternative to `-f`) |
+| `--tf-resource` | Terraform resource address (when plan has multiple ECS task definitions) |
+| `-o, --override` | Path to local override file |
+| `-s, --secrets` | Path to local secrets mapping file |
+| `-p, --profile` | Profile name for convention-based override/secrets resolution |
 
 Checks include:
 - Image name format validation
@@ -151,7 +174,7 @@ lecs init --dir my-project --image node:20 --family web-service
 | `--image` | `nginx:latest` | Container image for the initial definition |
 | `--family` | `my-app` | Task family name |
 
-Creates: `task-definition.json`, `lecs-override.json`, `secrets.local.json`. Existing files are skipped.
+Creates: `task-definition.json`, `lecs-override.json`, `secrets.local.json`, `.lecs.toml`. Existing files are skipped.
 
 ### `lecs ps`
 
@@ -210,12 +233,36 @@ lecs logs app --follow
 |------|-------------|
 | `-f, --follow` | Follow log output (like `tail -f`) |
 
+### `lecs watch`
+
+Watches task definition and related files for changes and automatically restarts the task.
+
+```bash
+lecs watch -f task-definition.json
+lecs watch --from-tf plan.json
+lecs watch -f task-definition.json --debounce 1000 --watch-path ./src
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-f, --task-definition` | — | Path to ECS task definition JSON (required unless `--from-tf`) |
+| `--from-tf` | — | Path to `terraform show -json` output (alternative to `-f`) |
+| `--tf-resource` | — | Terraform resource address |
+| `-o, --override` | — | Path to local override file |
+| `-s, --secrets` | — | Path to local secrets mapping file |
+| `-p, --profile` | — | Profile name |
+| `--debounce` | `500` | Debounce interval in milliseconds |
+| `--watch-path` | — | Additional paths to watch (repeatable) |
+| `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
+| `--events` | — | Emit structured lifecycle events (NDJSON) to stderr |
+
 ### `lecs diff`
 
 Compares two task definition files semantically, showing differences at the container, environment variable, and port level.
 
 ```bash
 lecs diff task-v1.json task-v2.json
+lecs diff --no-color task-v1.json task-v2.json
 ```
 
 Output shows added (`+`), removed (`-`), and changed (`~`) fields organized by container.
@@ -287,6 +334,55 @@ Lecs accepts standard ECS task definition JSON. Unsupported fields are silently 
   ]
 }
 ```
+
+### Terraform Plan/State Input
+
+Lecs can read `terraform show -json` output directly, extracting `aws_ecs_task_definition` resources without requiring a separate task definition JSON file.
+
+```bash
+# Generate Terraform plan JSON
+terraform plan -out=tfplan
+terraform show -json tfplan > plan.json
+
+# Run from Terraform plan
+lecs run --from-tf plan.json
+
+# Validate from Terraform plan
+lecs validate --from-tf plan.json
+
+# When plan has multiple ECS task definitions, specify the resource address
+lecs run --from-tf plan.json --tf-resource aws_ecs_task_definition.app
+
+# Run from Terraform state
+terraform show -json > state.json
+lecs run --from-tf state.json
+```
+
+Both plan output (`planned_values`) and state output (`values`) are supported. Child modules are searched recursively. The `container_definitions` JSON string inside Terraform output is automatically parsed (double deserialization).
+
+### Configuration Profiles
+
+Profiles provide convention-based override and secrets file resolution:
+
+```bash
+# Uses lecs-override.dev.json and secrets.dev.json if they exist
+lecs run -f task-definition.json --profile dev
+
+# Profile works with validate and watch too
+lecs validate -f task-definition.json --profile staging
+lecs watch -f task-definition.json --profile dev
+```
+
+Set a default profile in `.lecs.toml`:
+
+```toml
+default_profile = "dev"
+```
+
+Profile resolution priority:
+1. Explicit `--override` / `--secrets` flags (highest)
+2. Profile-resolved paths (e.g., `lecs-override.dev.json`)
+3. Default profile from `.lecs.toml`
 
 ### Local Overrides
 
@@ -374,11 +470,12 @@ The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and
 ```
 src/
 ├── main.rs              # Async entry point (clap + tokio)
-├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, history, version
-├── taskdef/             # ECS task definition JSON parser & validation diagnostics
+├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, history, diff, watch, completions, version
+├── taskdef/             # ECS task definition JSON parser, validation diagnostics & Terraform input converter
 ├── container/           # OCI container runtime client (bollard, Docker/Podman)
 ├── overrides/           # Local override configuration
 ├── secrets/             # Secrets local resolver
+├── profile/             # Profile-based file resolution (.lecs.toml)
 ├── orchestrator/        # Container lifecycle & dependsOn DAG
 ├── metadata/            # ECS metadata endpoint mock (axum HTTP server)
 ├── credentials/         # AWS credential provider (aws-config)
@@ -390,7 +487,7 @@ src/
 
 | Crate | Purpose |
 |-------|---------|
-| `clap` | CLI framework (derive) |
+| `clap` / `clap_complete` | CLI framework (derive) + shell completion generation |
 | `bollard` | OCI container runtime API client (Docker/Podman) |
 | `tokio` | Async runtime |
 | `serde` / `serde_json` | JSON handling |
@@ -400,6 +497,9 @@ src/
 | `tracing` | Structured logging |
 | `anyhow` / `thiserror` | Error handling |
 | `futures-util` | Stream processing for container logs |
+| `toml` | Configuration file parsing (`.lecs.toml`) |
+| `notify` | File system watching (`lecs watch`) |
+| `getrandom` | CSPRNG for auth token generation |
 
 ## Development
 
@@ -427,7 +527,8 @@ make clean      # cargo clean
 - **Phase 5**: Volumes + log coloring + UX improvements ✅
 - **Phase 6**: Validation + init + dry-run ✅
 - **Phase 7**: Observability + diagnostics ✅
-- **Phase 8**: Workflow acceleration (in progress)
+- **Phase 8**: Workflow acceleration ✅
+- **Phase 9**: Terraform compatibility ✅
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
 
