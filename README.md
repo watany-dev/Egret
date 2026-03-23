@@ -369,6 +369,21 @@ Use `--no-metadata` to disable this feature entirely (no server started, no env 
 
 The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and included in the metadata response.
 
+## How is Lecs different from the ECS CLI?
+
+The ECS CLI has `ecs-cli local` for local execution, but the approach is fundamentally different:
+
+| | `ecs-cli local` (deprecated) | **Lecs** |
+|-|-------------------------------|----------|
+| **How** | Converts task def → Docker Compose → `docker-compose up` | Runs task def **directly** via Docker/Podman API |
+| **Metadata** | Requires separate `amazon-ecs-local-container-endpoints` container | **Built-in** |
+| **dependsOn** | Loses COMPLETE/SUCCESS conditions in Compose translation | **All conditions preserved** (START/COMPLETE/SUCCESS/HEALTHY) |
+| **DX** | No validation, watch, diff, inspect, stats | **Full toolkit** |
+
+Lecs interprets the **same `task-definition.json`** you deploy to ECS — no intermediate translation, no Docker Compose dependency, no extra setup. ECS-specific semantics (`dependsOn` conditions, `essential` flag, `secrets` ARN resolution) are preserved as-is.
+
+See [docs/ecs-cli-comparison.md](docs/ecs-cli-comparison.md) for a detailed comparison.
+
 ## Architecture
 
 ```
