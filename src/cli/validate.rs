@@ -30,11 +30,11 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
     )?;
 
     if let Some(tf_path) = &args.from_tf {
-        // For Terraform input, parse and validate via the terraform module.
-        let tf_json = std::fs::read_to_string(tf_path)?;
-        return execute_from_terraform_json(
-            &tf_json,
-            args.tf_resource.as_deref(),
+        // Use from_terraform_file() to enforce file size limits and consistent error handling.
+        let task_def = terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())
+            .context("validation failed: could not parse Terraform JSON")?;
+        return execute_validated_task_def(
+            &task_def,
             resolved
                 .override_path
                 .as_ref()
@@ -69,30 +69,26 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
     )
 }
 
-/// Validation logic for Terraform JSON input (testable without filesystem).
+/// Run extended validation on an already-parsed task definition.
 #[allow(clippy::print_stdout)]
-pub fn execute_from_terraform_json(
-    tf_json: &str,
-    resource_address: Option<&str>,
+fn execute_validated_task_def(
+    task_def: &TaskDefinition,
     override_json: Option<&str>,
     secrets_json: Option<&str>,
 ) -> Result<()> {
-    let task_def = terraform::from_terraform_json(tf_json, resource_address)
-        .context("validation failed: could not parse Terraform JSON")?;
-
-    let mut report = diagnostics::validate_extended(&task_def);
+    let mut report = diagnostics::validate_extended(task_def);
 
     if let Some(json) = override_json {
         let overrides = OverrideConfig::from_json(json)
             .context("validation failed: could not parse override file")?;
-        let diags = diagnostics::validate_overrides(&task_def, &overrides);
+        let diags = diagnostics::validate_overrides(task_def, &overrides);
         report.diagnostics.extend(diags);
     }
 
     if let Some(json) = secrets_json {
         let resolver = SecretsResolver::from_json(json)
             .context("validation failed: could not parse secrets file")?;
-        let diags = validate_secrets_coverage(&task_def, &resolver);
+        let diags = validate_secrets_coverage(task_def, &resolver);
         report.diagnostics.extend(diags);
     }
 

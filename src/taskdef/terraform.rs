@@ -275,8 +275,9 @@ fn convert_to_task_definition(
 
 /// Convert Terraform volume blocks to Lecs `Volume` structs.
 ///
-/// Only `host_path` bind mounts are supported; EFS/Docker volume configurations
-/// are skipped with a tracing warning.
+/// Volumes with `host_path` are converted to bind mounts; volumes without
+/// `host_path` (e.g. Docker-managed or EFS) are included with `host: None`.
+/// Unparseable volume entries are skipped with a tracing warning.
 fn convert_volumes(values: &serde_json::Value) -> Vec<Volume> {
     let Some(volume_arr) = values.get("volume").and_then(serde_json::Value::as_array) else {
         return Vec::new();

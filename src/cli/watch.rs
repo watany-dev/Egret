@@ -408,6 +408,70 @@ mod tests {
         assert_eq!(paths[1], PathBuf::from("override.json"));
     }
 
+    fn make_watch_args_from_tf(
+        tf_path: PathBuf,
+        tf_resource: Option<String>,
+        override_path: Option<PathBuf>,
+        secrets_path: Option<PathBuf>,
+        extra_paths: Vec<PathBuf>,
+    ) -> WatchArgs {
+        WatchArgs {
+            task_definition: None,
+            from_tf: Some(tf_path),
+            tf_resource,
+            r#override: override_path,
+            secrets: secrets_path,
+            profile: None,
+            no_metadata: false,
+            events: false,
+            debounce: 500,
+            watch_paths: extra_paths,
+        }
+    }
+
+    #[test]
+    fn collect_watch_paths_from_tf() {
+        let args = make_watch_args_from_tf(PathBuf::from("plan.json"), None, None, None, vec![]);
+        let paths = collect_watch_paths(args.from_tf.as_deref().unwrap(), &args, &no_resolved());
+        assert_eq!(paths, vec![PathBuf::from("plan.json")]);
+    }
+
+    #[test]
+    fn collect_watch_paths_from_tf_with_override_and_secrets() {
+        let args = make_watch_args_from_tf(
+            PathBuf::from("plan.json"),
+            Some("aws_ecs_task_definition.app".to_string()),
+            Some(PathBuf::from("override.json")),
+            Some(PathBuf::from("secrets.json")),
+            vec![PathBuf::from("/app/src")],
+        );
+        let paths = collect_watch_paths(args.from_tf.as_deref().unwrap(), &args, &no_resolved());
+        assert_eq!(paths.len(), 4);
+        assert_eq!(paths[0], PathBuf::from("plan.json"));
+        assert_eq!(paths[1], PathBuf::from("override.json"));
+        assert_eq!(paths[2], PathBuf::from("secrets.json"));
+        assert_eq!(paths[3], PathBuf::from("/app/src"));
+    }
+
+    #[test]
+    fn collect_watch_paths_from_tf_deduplicates_profile() {
+        let args = make_watch_args_from_tf(
+            PathBuf::from("plan.json"),
+            None,
+            Some(PathBuf::from("override.json")),
+            None,
+            vec![],
+        );
+        let resolved = ResolvedPaths {
+            override_path: Some(PathBuf::from("override.json")),
+            secrets_path: None,
+        };
+        let paths = collect_watch_paths(args.from_tf.as_deref().unwrap(), &args, &resolved);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("plan.json"));
+        assert_eq!(paths[1], PathBuf::from("override.json"));
+    }
+
     #[test]
     fn validate_watch_paths_missing_file() {
         let paths = vec![PathBuf::from("/nonexistent/path/file.json")];
