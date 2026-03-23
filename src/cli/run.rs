@@ -19,21 +19,34 @@ use crate::orchestrator::{ContainerSpec, orchestrate_startup};
 use crate::overrides::OverrideConfig;
 use crate::profile;
 use crate::secrets::SecretsResolver;
-use crate::taskdef::{ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume};
+use crate::taskdef::{
+    ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume, terraform,
+};
 
 /// Execute the `run` subcommand.
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout, clippy::too_many_lines)]
 pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
+    // Determine the input file path for profile resolution.
+    let input_path = args
+        .task_definition
+        .as_deref()
+        .or(args.from_tf.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))?;
+
     // Resolve profile paths
     let resolved = profile::resolve_from_args(
-        &args.task_definition,
+        input_path,
         args.profile.as_deref(),
         args.r#override.as_deref(),
         args.secrets.as_deref(),
     )?;
 
-    let mut task_def = TaskDefinition::from_file(&args.task_definition)?;
+    let mut task_def = if let Some(tf_path) = &args.from_tf {
+        terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())?
+    } else {
+        TaskDefinition::from_file(input_path)?
+    };
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
 
     // Apply overrides if provided

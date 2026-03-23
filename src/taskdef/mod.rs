@@ -1,6 +1,7 @@
 //! ECS task definition parsing and types.
 
 pub mod diagnostics;
+pub mod terraform;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,6 +26,20 @@ pub enum TaskDefError {
 
     #[error("task definition file too large ({size} bytes, max {max} bytes): {path}")]
     FileTooLarge { path: PathBuf, size: u64, max: u64 },
+
+    #[error("no aws_ecs_task_definition resource found in Terraform JSON")]
+    TerraformNoEcsResource,
+
+    #[error(
+        "multiple aws_ecs_task_definition resources found: {resources:?}. Use --tf-resource to specify one"
+    )]
+    TerraformMultipleResources { resources: Vec<String> },
+
+    #[error("terraform resource '{0}' not found")]
+    TerraformResourceNotFound(String),
+
+    #[error("failed to parse Terraform JSON: {0}")]
+    ParseTerraformJson(String),
 }
 
 /// ECS task definition top-level structure.

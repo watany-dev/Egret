@@ -7,6 +7,7 @@ use crate::profile;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::TaskDefinition;
 use crate::taskdef::diagnostics::{self, Severity, ValidationDiagnostic, ValidationReport};
+use crate::taskdef::terraform;
 
 use super::ValidateArgs;
 
@@ -14,15 +15,42 @@ use super::ValidateArgs;
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 pub fn execute(args: &ValidateArgs) -> Result<()> {
+    let input_path = args
+        .task_definition
+        .as_deref()
+        .or(args.from_tf.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))?;
+
     // Resolve profile paths
     let resolved = profile::resolve_from_args(
-        &args.task_definition,
+        input_path,
         args.profile.as_deref(),
         args.r#override.as_deref(),
         args.secrets.as_deref(),
     )?;
 
-    let task_json = std::fs::read_to_string(&args.task_definition)?;
+    if let Some(tf_path) = &args.from_tf {
+        // For Terraform input, parse and validate via the terraform module.
+        let tf_json = std::fs::read_to_string(tf_path)?;
+        return execute_from_terraform_json(
+            &tf_json,
+            args.tf_resource.as_deref(),
+            resolved
+                .override_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .as_deref(),
+            resolved
+                .secrets_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .as_deref(),
+        );
+    }
+
+    let task_json = std::fs::read_to_string(input_path)?;
     let override_json = resolved
         .override_path
         .as_ref()
@@ -39,6 +67,42 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
         override_json.as_deref(),
         secrets_json.as_deref(),
     )
+}
+
+/// Validation logic for Terraform JSON input (testable without filesystem).
+#[allow(clippy::print_stdout)]
+pub fn execute_from_terraform_json(
+    tf_json: &str,
+    resource_address: Option<&str>,
+    override_json: Option<&str>,
+    secrets_json: Option<&str>,
+) -> Result<()> {
+    let task_def = terraform::from_terraform_json(tf_json, resource_address)
+        .context("validation failed: could not parse Terraform JSON")?;
+
+    let mut report = diagnostics::validate_extended(&task_def);
+
+    if let Some(json) = override_json {
+        let overrides = OverrideConfig::from_json(json)
+            .context("validation failed: could not parse override file")?;
+        let diags = diagnostics::validate_overrides(&task_def, &overrides);
+        report.diagnostics.extend(diags);
+    }
+
+    if let Some(json) = secrets_json {
+        let resolver = SecretsResolver::from_json(json)
+            .context("validation failed: could not parse secrets file")?;
+        let diags = validate_secrets_coverage(&task_def, &resolver);
+        report.diagnostics.extend(diags);
+    }
+
+    print_report(&report);
+
+    if report.has_errors() {
+        anyhow::bail!("validation failed with {} error(s)", report.error_count());
+    }
+
+    Ok(())
 }
 
 /// Core validation logic (testable without filesystem).

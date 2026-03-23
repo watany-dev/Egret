@@ -81,8 +81,21 @@ pub struct DiffArgs {
 #[derive(Parser)]
 pub struct WatchArgs {
     /// Path to ECS task definition JSON file
-    #[arg(short = 'f', long = "task-definition")]
-    pub task_definition: PathBuf,
+    #[arg(
+        short = 'f',
+        long = "task-definition",
+        conflicts_with = "from_tf",
+        required_unless_present = "from_tf"
+    )]
+    pub task_definition: Option<PathBuf>,
+
+    /// Path to Terraform show JSON file (alternative to --task-definition)
+    #[arg(long = "from-tf", conflicts_with = "task_definition")]
+    pub from_tf: Option<PathBuf>,
+
+    /// Terraform resource address (required when multiple ECS task definitions exist)
+    #[arg(long = "tf-resource", requires = "from_tf")]
+    pub tf_resource: Option<String>,
 
     /// Path to local override file
     #[arg(short, long)]
@@ -135,8 +148,21 @@ pub struct StatsArgs {
 #[derive(Parser)]
 pub struct ValidateArgs {
     /// Path to ECS task definition JSON file
-    #[arg(short = 'f', long = "task-definition")]
-    pub task_definition: PathBuf,
+    #[arg(
+        short = 'f',
+        long = "task-definition",
+        conflicts_with = "from_tf",
+        required_unless_present = "from_tf"
+    )]
+    pub task_definition: Option<PathBuf>,
+
+    /// Path to Terraform show JSON file (alternative to --task-definition)
+    #[arg(long = "from-tf", conflicts_with = "task_definition")]
+    pub from_tf: Option<PathBuf>,
+
+    /// Terraform resource address (required when multiple ECS task definitions exist)
+    #[arg(long = "tf-resource", requires = "from_tf")]
+    pub tf_resource: Option<String>,
 
     /// Path to local override file (optional, validates cross-references)
     #[arg(short, long)]
@@ -169,8 +195,21 @@ pub struct InitArgs {
 #[derive(Parser)]
 pub struct RunArgs {
     /// Path to ECS task definition JSON file
-    #[arg(short = 'f', long = "task-definition")]
-    pub task_definition: PathBuf,
+    #[arg(
+        short = 'f',
+        long = "task-definition",
+        conflicts_with = "from_tf",
+        required_unless_present = "from_tf"
+    )]
+    pub task_definition: Option<PathBuf>,
+
+    /// Path to Terraform show JSON file (alternative to --task-definition)
+    #[arg(long = "from-tf", conflicts_with = "task_definition")]
+    pub from_tf: Option<PathBuf>,
+
+    /// Terraform resource address (required when multiple ECS task definitions exist)
+    #[arg(long = "tf-resource", requires = "from_tf")]
+    pub tf_resource: Option<String>,
 
     /// Path to local override file
     #[arg(short, long)]
@@ -255,7 +294,10 @@ mod tests {
         let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert_eq!(
+                    args.task_definition.as_ref().unwrap().to_str(),
+                    Some("task.json")
+                );
                 assert!(args.r#override.is_none());
                 assert!(args.secrets.is_none());
             }
@@ -301,7 +343,10 @@ mod tests {
         .expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert_eq!(
+                    args.task_definition.as_ref().unwrap().to_str(),
+                    Some("task.json")
+                );
                 assert_eq!(
                     args.r#override.as_ref().unwrap().to_str(),
                     Some("override.json")
@@ -437,7 +482,10 @@ mod tests {
             Cli::try_parse_from(["lecs", "validate", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Validate(args) => {
-                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert_eq!(
+                    args.task_definition.as_ref().unwrap().to_str(),
+                    Some("task.json")
+                );
                 assert!(args.r#override.is_none());
                 assert!(args.secrets.is_none());
             }
@@ -715,7 +763,10 @@ mod tests {
         let cli = Cli::try_parse_from(["lecs", "watch", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Watch(args) => {
-                assert_eq!(args.task_definition.to_str(), Some("task.json"));
+                assert_eq!(
+                    args.task_definition.as_ref().unwrap().to_str(),
+                    Some("task.json")
+                );
                 assert_eq!(args.debounce, 500);
                 assert!(args.watch_paths.is_empty());
                 assert!(!args.no_metadata);
@@ -755,6 +806,102 @@ mod tests {
                 assert_eq!(args.watch_paths.len(), 2);
                 assert_eq!(args.watch_paths[0].to_str(), Some("/app/src"));
                 assert_eq!(args.watch_paths[1].to_str(), Some("/app/config"));
+            }
+            _ => panic!("expected Watch command"),
+        }
+    }
+
+    // --from-tf tests
+
+    #[test]
+    fn parse_run_with_from_tf() {
+        let cli =
+            Cli::try_parse_from(["lecs", "run", "--from-tf", "plan.json"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.task_definition.is_none());
+                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
+                assert!(args.tf_resource.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_from_tf_and_resource() {
+        let cli = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "--from-tf",
+            "plan.json",
+            "--tf-resource",
+            "aws_ecs_task_definition.app",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
+                assert_eq!(
+                    args.tf_resource.as_deref(),
+                    Some("aws_ecs_task_definition.app")
+                );
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_from_tf_conflicts_with_task_definition() {
+        let result =
+            Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--from-tf", "plan.json"]);
+        assert!(result.is_err(), "should fail: -f and --from-tf conflict");
+    }
+
+    #[test]
+    fn parse_run_requires_either_f_or_from_tf() {
+        let result = Cli::try_parse_from(["lecs", "run"]);
+        assert!(
+            result.is_err(),
+            "should fail: neither -f nor --from-tf provided"
+        );
+    }
+
+    #[test]
+    fn parse_run_tf_resource_requires_from_tf() {
+        // --tf-resource alone (without --from-tf) should fail
+        let result = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "--tf-resource",
+            "aws_ecs_task_definition.app",
+        ]);
+        assert!(
+            result.is_err(),
+            "should fail: --tf-resource requires --from-tf"
+        );
+    }
+
+    #[test]
+    fn parse_validate_with_from_tf() {
+        let cli = Cli::try_parse_from(["lecs", "validate", "--from-tf", "plan.json"])
+            .expect("should parse");
+        match cli.command {
+            Command::Validate(args) => {
+                assert!(args.task_definition.is_none());
+                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
+            }
+            _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_watch_with_from_tf() {
+        let cli =
+            Cli::try_parse_from(["lecs", "watch", "--from-tf", "plan.json"]).expect("should parse");
+        match cli.command {
+            Command::Watch(args) => {
+                assert!(args.task_definition.is_none());
+                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
             }
             _ => panic!("expected Watch command"),
         }
