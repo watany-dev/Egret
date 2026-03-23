@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn parse_diff_with_no_color() {
-        let cli = Cli::try_parse_from(["egret", "diff", "--no-color", "a.json", "b.json"])
+        let cli = Cli::try_parse_from(["lecs", "diff", "--no-color", "a.json", "b.json"])
             .expect("should parse");
         match cli.command {
             Command::Diff(args) => {
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn parse_watch_command() {
-        let cli = Cli::try_parse_from(["egret", "watch", "-f", "task.json"]).expect("should parse");
+        let cli = Cli::try_parse_from(["lecs", "watch", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Watch(args) => {
                 assert_eq!(args.task_definition.to_str(), Some("task.json"));
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn parse_watch_with_debounce() {
-        let cli = Cli::try_parse_from(["egret", "watch", "-f", "task.json", "--debounce", "1000"])
+        let cli = Cli::try_parse_from(["lecs", "watch", "-f", "task.json", "--debounce", "1000"])
             .expect("should parse");
         match cli.command {
             Command::Watch(args) => {
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn parse_watch_with_watch_paths() {
         let cli = Cli::try_parse_from([
-            "egret",
+            "lecs",
             "watch",
             "-f",
             "task.json",

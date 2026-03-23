@@ -1,4 +1,4 @@
-//! `egret watch` command implementation.
+//! `lecs watch` command implementation.
 //!
 //! Watches task definition, override, and secrets files for changes
 //! and automatically restarts the task on modification.
@@ -352,13 +352,13 @@ mod tests {
     fn collect_watch_paths_with_profile_resolved() {
         let args = make_watch_args(PathBuf::from("task.json"), None, None, vec![]);
         let resolved = ResolvedPaths {
-            override_path: Some(PathBuf::from("egret-override.dev.json")),
+            override_path: Some(PathBuf::from("lecs-override.dev.json")),
             secrets_path: Some(PathBuf::from("secrets.dev.json")),
         };
         let paths = collect_watch_paths(&args, &resolved);
         assert_eq!(paths.len(), 3);
         assert_eq!(paths[0], PathBuf::from("task.json"));
-        assert!(paths.contains(&PathBuf::from("egret-override.dev.json")));
+        assert!(paths.contains(&PathBuf::from("lecs-override.dev.json")));
         assert!(paths.contains(&PathBuf::from("secrets.dev.json")));
     }
 
