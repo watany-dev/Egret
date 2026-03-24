@@ -181,6 +181,10 @@ pub struct ContainerDefinition {
     /// Resource limits (ulimits) for the container.
     #[serde(default)]
     pub ulimits: Vec<Ulimit>,
+
+    /// Linux-specific parameters.
+    #[serde(default)]
+    pub linux_parameters: Option<LinuxParameters>,
 }
 
 impl Default for ContainerDefinition {
@@ -207,6 +211,7 @@ impl Default for ContainerDefinition {
             stop_timeout: None,
             environment_files: Vec::new(),
             ulimits: Vec::new(),
+            linux_parameters: None,
         }
     }
 }
@@ -369,6 +374,34 @@ pub struct Ulimit {
     pub soft_limit: i64,
     /// Hard limit.
     pub hard_limit: i64,
+}
+
+/// Linux-specific parameters for a container.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinuxParameters {
+    /// Run an init process inside the container (PID 1 reaper).
+    #[serde(default)]
+    pub init_process_enabled: Option<bool>,
+    /// Size of `/dev/shm` in MiB.
+    #[serde(default)]
+    pub shared_memory_size: Option<i64>,
+    /// Tmpfs mounts inside the container.
+    #[serde(default)]
+    pub tmpfs: Vec<TmpfsMount>,
+}
+
+/// Tmpfs mount specification.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TmpfsMount {
+    /// Absolute path inside the container.
+    pub container_path: String,
+    /// Size in MiB.
+    pub size: i64,
+    /// Mount options (e.g., "rw", "noexec").
+    #[serde(default)]
+    pub mount_options: Vec<String>,
 }
 
 /// Load environment variables from `.env`-formatted files.
@@ -1997,6 +2030,63 @@ mod tests {
         assert_eq!(vars[0].1, "first");
         assert_eq!(vars[2].0, "FOO");
         assert_eq!(vars[2].1, "second");
+    }
+
+    // --- linuxParameters tests ---
+
+    #[test]
+    fn parse_linux_parameters_full() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "linuxParameters": {
+                    "initProcessEnabled": true,
+                    "sharedMemorySize": 256,
+                    "tmpfs": [{
+                        "containerPath": "/run",
+                        "size": 64,
+                        "mountOptions": ["rw", "noexec"]
+                    }]
+                }
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        let lp = td.container_definitions[0].linux_parameters.as_ref().unwrap();
+        assert_eq!(lp.init_process_enabled, Some(true));
+        assert_eq!(lp.shared_memory_size, Some(256));
+        assert_eq!(lp.tmpfs.len(), 1);
+        assert_eq!(lp.tmpfs[0].container_path, "/run");
+        assert_eq!(lp.tmpfs[0].size, 64);
+        assert_eq!(lp.tmpfs[0].mount_options, vec!["rw", "noexec"]);
+    }
+
+    #[test]
+    fn parse_linux_parameters_partial_init_only() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "linuxParameters": { "initProcessEnabled": true }
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        let lp = td.container_definitions[0].linux_parameters.as_ref().unwrap();
+        assert_eq!(lp.init_process_enabled, Some(true));
+        assert!(lp.shared_memory_size.is_none());
+        assert!(lp.tmpfs.is_empty());
+    }
+
+    #[test]
+    fn parse_linux_parameters_defaults_to_none() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{ "name": "app", "image": "nginx:latest" }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].linux_parameters.is_none());
     }
 
     // --- ulimits tests ---

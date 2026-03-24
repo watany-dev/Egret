@@ -106,6 +106,12 @@ pub struct ContainerConfig {
     pub memory_reservation_mib: Option<u32>,
     /// Resource limits (ulimits) for the container.
     pub ulimits: Vec<UlimitConfig>,
+    /// Run an init process inside the container.
+    pub init: Option<bool>,
+    /// Size of `/dev/shm` in bytes.
+    pub shm_size: Option<i64>,
+    /// Tmpfs mounts (path → mount options string).
+    pub tmpfs: HashMap<String, String>,
 }
 
 /// Resource limit (ulimit) configuration for a container.
@@ -763,6 +769,13 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
                     .collect(),
             )
         },
+        init: config.init,
+        shm_size: config.shm_size,
+        tmpfs: if config.tmpfs.is_empty() {
+            None
+        } else {
+            Some(config.tmpfs.clone())
+        },
         ..Default::default()
     };
 
@@ -1108,6 +1121,44 @@ mod tests {
         let result = build_bollard_config(&config);
         let hc = result.host_config.as_ref().expect("host_config");
         assert!(hc.ulimits.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_init_process() {
+        let mut config = sample_config();
+        config.init = Some(true);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert_eq!(hc.init, Some(true));
+    }
+
+    #[test]
+    fn build_bollard_config_shm_size() {
+        let mut config = sample_config();
+        config.shm_size = Some(268_435_456); // 256 MiB in bytes
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert_eq!(hc.shm_size, Some(268_435_456));
+    }
+
+    #[test]
+    fn build_bollard_config_tmpfs() {
+        let mut config = sample_config();
+        config
+            .tmpfs
+            .insert("/run".to_string(), "size=67108864,rw,noexec".to_string());
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        let tmpfs = hc.tmpfs.as_ref().expect("tmpfs");
+        assert_eq!(tmpfs.get("/run").map(String::as_str), Some("size=67108864,rw,noexec"));
+    }
+
+    #[test]
+    fn build_bollard_config_empty_tmpfs() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(hc.tmpfs.is_none());
     }
 
     #[test]

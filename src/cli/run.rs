@@ -506,6 +506,33 @@ fn build_container_config(
                 hard: u.hard_limit,
             })
             .collect(),
+        init: def
+            .linux_parameters
+            .as_ref()
+            .and_then(|lp| lp.init_process_enabled),
+        shm_size: def
+            .linux_parameters
+            .as_ref()
+            .and_then(|lp| lp.shared_memory_size)
+            .map(|mib| mib * 1024 * 1024),
+        tmpfs: def
+            .linux_parameters
+            .as_ref()
+            .map(|lp| {
+                lp.tmpfs
+                    .iter()
+                    .map(|t| {
+                        let size_bytes = t.size * 1024 * 1024;
+                        let mut opts = format!("size={size_bytes}");
+                        for opt in &t.mount_options {
+                            opts.push(',');
+                            opts.push_str(opt);
+                        }
+                        (t.container_path.clone(), opts)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
