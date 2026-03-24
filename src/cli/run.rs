@@ -16,95 +16,14 @@ use crate::metadata::{
     build_task_metadata,
 };
 use crate::orchestrator::{ContainerSpec, orchestrate_startup};
-use crate::overrides::OverrideConfig;
-use crate::profile;
-use crate::secrets::SecretsResolver;
-use crate::taskdef::{
-    ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume, cloudformation, terraform,
-};
+use crate::taskdef::{ContainerDefinition, MountPoint, TaskDefinition, Volume};
 
 /// Execute the `run` subcommand.
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout, clippy::too_many_lines)]
 pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
-    // Determine the input file path for profile resolution.
-    let input_path = args
-        .source
-        .task_definition
-        .as_deref()
-        .or(args.source.from_tf.as_deref())
-        .or(args.source.from_cfn.as_deref())
-        .ok_or_else(|| {
-            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
-        })?;
-
-    // Resolve profile paths
-    let resolved = profile::resolve_from_args(
-        input_path,
-        args.source.profile.as_deref(),
-        args.source.r#override.as_deref(),
-        args.source.secrets.as_deref(),
-    )?;
-
-    let mut task_def = if let Some(tf_path) = &args.source.from_tf {
-        terraform::from_terraform_file(tf_path, args.source.tf_resource.as_deref())?
-    } else if let Some(cfn_path) = &args.source.from_cfn {
-        cloudformation::from_cfn_file(cfn_path, args.source.cfn_resource.as_deref())?
-    } else {
-        TaskDefinition::from_file(input_path)?
-    };
+    let task_def = args.source.load_task_def()?;
     tracing::info!(family = %task_def.family, containers = task_def.container_definitions.len(), "Parsed task definition");
-
-    // Apply overrides if provided
-    if let Some(override_path) = &resolved.override_path {
-        let override_config = OverrideConfig::from_file(override_path)?;
-        override_config.apply(&mut task_def);
-        tracing::info!("Applied overrides from {}", override_path.display());
-    }
-
-    // Resolve secrets if provided
-    let has_secrets = task_def
-        .container_definitions
-        .iter()
-        .any(|c| !c.secrets.is_empty());
-
-    if let Some(secrets_path) = &resolved.secrets_path {
-        let secrets_resolver = SecretsResolver::from_file(secrets_path)?;
-        for container in &mut task_def.container_definitions {
-            let secret_env_vars = secrets_resolver.resolve(&container.secrets)?;
-            for (name, value) in secret_env_vars {
-                container.environment.push(Environment { name, value });
-            }
-        }
-        tracing::info!("Resolved secrets from {}", secrets_path.display());
-    } else if has_secrets {
-        tracing::warn!(
-            "Task definition has secrets but --secrets flag was not provided. Secret values will not be resolved."
-        );
-    }
-
-    // Load environment files (.env format) if specified in container definitions
-    let base_dir = input_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    for container in &mut task_def.container_definitions {
-        if !container.environment_files.is_empty() {
-            let env_vars =
-                crate::taskdef::load_environment_files(&container.environment_files, base_dir)?;
-            // environmentFiles are loaded first; explicit environment entries override them.
-            // We prepend env file vars so that container.environment (appended later) wins.
-            let existing: Vec<Environment> = std::mem::take(&mut container.environment);
-            for (name, value) in env_vars {
-                container.environment.push(Environment { name, value });
-            }
-            // Re-append existing environment entries so they take precedence
-            container.environment.extend(existing);
-            tracing::info!(
-                container = %container.name,
-                "Loaded environment files"
-            );
-        }
-    }
 
     // Dry-run: display resolved configuration and exit
     if args.dry_run {

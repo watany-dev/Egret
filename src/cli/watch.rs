@@ -16,14 +16,7 @@ use crate::profile::ResolvedPaths;
 ///
 /// Returns an error if none of `--task-definition`, `--from-tf`, or `--from-cfn` is provided.
 fn input_path(args: &WatchArgs) -> Result<&std::path::Path> {
-    args.source
-        .task_definition
-        .as_deref()
-        .or(args.source.from_tf.as_deref())
-        .or(args.source.from_cfn.as_deref())
-        .ok_or_else(|| {
-            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
-        })
+    args.source.input_path()
 }
 
 /// Collect all paths that should be watched for changes.
@@ -213,48 +206,7 @@ async fn load_and_run_task(
     client: &crate::container::ContainerClient,
     event_sink: &dyn crate::events::EventSink,
 ) -> Result<WatchTaskState> {
-    use crate::overrides::OverrideConfig;
-    use crate::secrets::SecretsResolver;
-    use crate::taskdef::{Environment, TaskDefinition, cloudformation, terraform};
-
-    let path = input_path(args)?;
-
-    let resolved = crate::profile::resolve_from_args(
-        path,
-        args.source.profile.as_deref(),
-        args.source.r#override.as_deref(),
-        args.source.secrets.as_deref(),
-    )?;
-
-    let mut task_def = if let Some(tf_path) = &args.source.from_tf {
-        terraform::from_terraform_file(tf_path, args.source.tf_resource.as_deref())?
-    } else if let Some(cfn_path) = &args.source.from_cfn {
-        cloudformation::from_cfn_file(cfn_path, args.source.cfn_resource.as_deref())?
-    } else {
-        TaskDefinition::from_file(path)?
-    };
-
-    if let Some(override_path) = &resolved.override_path {
-        let override_config = OverrideConfig::from_file(override_path)?;
-        override_config.apply(&mut task_def);
-    }
-
-    let has_secrets = task_def
-        .container_definitions
-        .iter()
-        .any(|c| !c.secrets.is_empty());
-
-    if let Some(secrets_path) = &resolved.secrets_path {
-        let secrets_resolver = SecretsResolver::from_file(secrets_path)?;
-        for container in &mut task_def.container_definitions {
-            let secret_env_vars = secrets_resolver.resolve(&container.secrets)?;
-            for (name, value) in secret_env_vars {
-                container.environment.push(Environment { name, value });
-            }
-        }
-    } else if has_secrets {
-        tracing::warn!("Task definition has secrets but --secrets flag was not provided.");
-    }
+    let task_def = args.source.load_task_def()?;
 
     // Start metadata server if enabled (mirrors run::execute behavior)
     let (metadata_server, metadata_state) = if args.no_metadata {
