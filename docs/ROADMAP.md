@@ -200,6 +200,63 @@ src/
 - [x] Volume 変換 — Terraform の `volume`（snake_case）を Lecs の `volumes`（camelCase）に変換
 - [x] 対応コマンド: `lecs run`, `lecs validate`, `lecs watch`
 
+### Phase 10: タスク定義フィールド完全対応
+**目標**: パース済みフィールドの実適用 + 高重要度フィールドの追加
+
+> ECS CLI との機能比較で、パース済みだが未使用のフィールド（cpu/memory）や、ローカル開発で頻繁に必要となるフィールド（workingDirectory, user, stopTimeout 等）が未対応であることを確認。小工数で「本番との挙動差」を大幅に削減できる。
+
+- [ ] `cpu` / `memory` / `memoryReservation` をコンテナリソース制限に適用
+  - `ContainerConfig` に `cpu_shares` / `memory` フィールド追加
+  - `build_bollard_config` で `HostConfig` に反映
+- [ ] `workingDirectory` 対応
+  - `ContainerDefinition` にフィールド追加、`Config::working_dir` に設定
+- [ ] `user` 対応
+  - `ContainerDefinition` にフィールド追加、`Config::user` に設定
+- [ ] `stopTimeout` 対応（現在ハードコード 10 秒を置換）
+  - `ContainerDefinition` にフィールド追加、`stop_container` のタイムアウト引数に反映
+- [ ] `dockerLabels` パススルー
+  - `ContainerDefinition` にフィールド追加、lecs 管理ラベルとマージ（lecs ラベル優先）
+- [ ] `extraHosts` 対応
+  - `ContainerDefinition` にフィールド追加、`host.docker.internal:host-gateway` と結合
+
+### Phase 11: ECS Exec + 環境変数拡張
+**目標**: デバッグ体験の向上
+
+> `aws ecs execute-command` に相当する機能がなく、開発者は `docker exec` を直接叩く必要がある。`lecs exec` で Lecs 管理コンテナへの一貫したアクセスを提供する。
+
+- [ ] `lecs exec <container> [-- command]` — コンテナ内コマンド実行
+  - 新規 `src/cli/exec.rs`、bollard の `exec_create` / `exec_start` 利用
+  - stdin/stdout/stderr 接続、デフォルト `/bin/sh`
+- [ ] `environmentFiles` 対応
+  - `ContainerDefinition` にフィールド追加、ローカルファイル（.env 形式）を読み込み `environment` にマージ
+- [ ] `ulimits` 対応
+  - `ContainerDefinition` にフィールド追加、`HostConfig::ulimits` に反映
+- [ ] `linuxParameters` 主要フィールド対応
+  - `initProcessEnabled` → `HostConfig::init`
+  - `tmpfs` → `HostConfig::tmpfs`
+  - `sharedMemorySize` → `HostConfig::shm_size`
+
+### Phase 12: サービスモード MVP
+**目標**: コンテナ障害時の自動再起動
+
+> `docs/design/service-gap-analysis.md` に基づく。ECS Service の最小要件であるリスタートポリシーと、長時間稼働に必要なクレデンシャルローテーションを実装する。
+
+- [ ] リスタートポリシー
+  - `RestartPolicy` enum（`None` / `OnFailure` / `Always`）+ 指数バックオフ（1s → 2s → ... → 300s）
+  - essential コンテナ終了時の再起動判定ロジック
+- [ ] `lecs run --service` フラグ
+  - reconciliation ループ有効化、Ctrl+C まで常時稼働
+- [ ] クレデンシャルローテーション
+  - `tokio::spawn` でバックグラウンドリフレッシュ
+  - `AppState` 内の credentials を `RwLock` で保護、TTL/2 間隔で更新
+
+---
+
+## 将来検討
+
+- **Phase 13**: ネットワークモード拡張（`networkMode: host` / `none`）
+- **Phase 14**: Docker Compose 互換（`lecs convert`, `lecs run --compose`）
+
 ---
 
 ## 実装順序とPhase間の依存関係
@@ -220,6 +277,12 @@ Phase 0-2.5: ✅ 完了
     │       └── Phase 8 (ワークフロー高速化) ✅
     │               │
     │               └── Phase 9 (Terraform 互換性) ✅
+    │                       │
+    │                       ├── Phase 10 (タスク定義フィールド完全対応)
+    │                       │       │
+    │                       │       └── Phase 11 (ECS Exec + 環境変数拡張)
+    │                       │
+    │                       └── Phase 12 (サービスモード MVP)
 ```
 
 ---
@@ -230,8 +293,10 @@ Phase 0-2.5: ✅ 完了
 - ALB / Cloud Map / Service Connect
 - Capacity providers / Deployment circuit breaker
 - FireLens 本番同等挙動
-- Service / Auto Scaling / ローリングデプロイ
+- Auto Scaling / ローリングデプロイ（Phase 12 MVP には含まず）
 - コンテナイメージのビルド（Docker/Buildah/Kaniko の責務）
 - Prometheus / Grafana 等の外部監視スタック連携
 - awsvpc ネットワークモード完全再現
 - Service Mesh / Service Connect
+- ECR push/pull（Docker CLI の責務）
+- Cluster / Container Instance 管理（ローカルでは不要）
