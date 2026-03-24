@@ -121,15 +121,12 @@ pub struct ContainerDefinition {
     pub secrets: Vec<Secret>,
 
     /// CPU units (1024 = 1 vCPU).
-    #[allow(dead_code)]
     pub cpu: Option<u32>,
 
     /// Hard memory limit (MiB).
-    #[allow(dead_code)]
     pub memory: Option<u32>,
 
     /// Soft memory limit (MiB).
-    #[allow(dead_code)]
     pub memory_reservation: Option<u32>,
 
     /// Container dependencies (startup ordering).

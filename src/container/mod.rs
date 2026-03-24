@@ -91,6 +91,12 @@ pub struct ContainerConfig {
     pub working_dir: Option<String>,
     /// User to run the container as.
     pub user: Option<String>,
+    /// CPU units (1024 = 1 vCPU).
+    pub cpu_units: Option<u32>,
+    /// Hard memory limit (MiB).
+    pub memory_mib: Option<u32>,
+    /// Soft memory limit (MiB).
+    pub memory_reservation_mib: Option<u32>,
 }
 
 impl Default for ContainerConfig {
@@ -110,6 +116,9 @@ impl Default for ContainerConfig {
             binds: Vec::new(),
             working_dir: None,
             user: None,
+            cpu_units: None,
+            memory_mib: None,
+            memory_reservation_mib: None,
         }
     }
 }
@@ -732,6 +741,15 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         port_bindings: Some(port_bindings),
         extra_hosts,
         binds,
+        nano_cpus: config
+            .cpu_units
+            .map(|cpu| i64::from(cpu) * 1_000_000_000 / 1024),
+        memory: config
+            .memory_mib
+            .map(|m| i64::from(m) * 1024 * 1024),
+        memory_reservation: config
+            .memory_reservation_mib
+            .map(|m| i64::from(m) * 1024 * 1024),
         ..Default::default()
     };
 
@@ -999,6 +1017,46 @@ mod tests {
         let config = sample_config();
         let result = build_bollard_config(&config);
         assert!(result.user.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_cpu_conversion() {
+        let mut config = sample_config();
+        config.cpu_units = Some(256);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        // 256 * 1_000_000_000 / 1024 = 250_000_000
+        assert_eq!(hc.nano_cpus, Some(250_000_000));
+    }
+
+    #[test]
+    fn build_bollard_config_memory_conversion() {
+        let mut config = sample_config();
+        config.memory_mib = Some(512);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        // 512 * 1024 * 1024 = 536_870_912
+        assert_eq!(hc.memory, Some(536_870_912));
+    }
+
+    #[test]
+    fn build_bollard_config_memory_reservation_conversion() {
+        let mut config = sample_config();
+        config.memory_reservation_mib = Some(256);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        // 256 * 1024 * 1024 = 268_435_456
+        assert_eq!(hc.memory_reservation, Some(268_435_456));
+    }
+
+    #[test]
+    fn build_bollard_config_no_resource_limits() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(hc.nano_cpus.is_none());
+        assert!(hc.memory.is_none());
+        assert!(hc.memory_reservation.is_none());
     }
 
     #[test]

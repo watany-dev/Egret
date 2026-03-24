@@ -466,6 +466,9 @@ fn build_container_config(
         binds,
         working_dir: def.working_directory.clone(),
         user: def.user.clone(),
+        cpu_units: def.cpu,
+        memory_mib: def.memory,
+        memory_reservation_mib: def.memory_reservation,
     }
 }
 
@@ -549,6 +552,19 @@ fn format_container_dry_run(
 
     if let Some(user) = &container.user {
         let _ = writeln!(output, "  User: {user}");
+    }
+
+    if container.cpu.is_some() || container.memory.is_some() || container.memory_reservation.is_some() {
+        output.push_str("  Resources:\n");
+        if let Some(cpu) = container.cpu {
+            let _ = writeln!(output, "    CPU: {cpu} units");
+        }
+        if let Some(mem) = container.memory {
+            let _ = writeln!(output, "    Memory: {mem} MiB (hard limit)");
+        }
+        if let Some(mem) = container.memory_reservation {
+            let _ = writeln!(output, "    Memory reservation: {mem} MiB (soft limit)");
+        }
     }
 
     if !container.docker_labels.is_empty() {
