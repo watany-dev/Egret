@@ -158,7 +158,9 @@ fn select_resource<'a>(
             if resources.len() == 1 {
                 Ok(resources[0])
             } else {
-                let ids: Vec<String> = resources.iter().map(|(id, _)| (*id).to_string()).collect();
+                let mut ids: Vec<String> =
+                    resources.iter().map(|(id, _)| (*id).to_string()).collect();
+                ids.sort();
                 Err(TaskDefError::CfnMultipleResources { resources: ids })
             }
         }
@@ -172,15 +174,19 @@ fn select_resource<'a>(
 fn detect_intrinsic_functions(value: &Value, context: &str) -> Result<(), TaskDefError> {
     match value {
         Value::Object(map) => {
-            for key in map.keys() {
-                if INTRINSIC_FUNCTION_KEYS.contains(&key.as_str()) {
-                    return Err(TaskDefError::CfnIntrinsicFunction {
-                        field: context.to_string(),
-                        detail: format!(
-                            "'{key}' cannot be resolved locally. Use a fully resolved template (e.g. cdk synth output)"
-                        ),
-                    });
-                }
+            // Detect intrinsics by object shape: a single-key map whose key is an intrinsic.
+            // This avoids false positives from user-defined maps that happen to contain
+            // keys like "Ref" alongside other entries.
+            if map.len() == 1
+                && let Some(key) = map.keys().next()
+                && INTRINSIC_FUNCTION_KEYS.contains(&key.as_str())
+            {
+                return Err(TaskDefError::CfnIntrinsicFunction {
+                    field: context.to_string(),
+                    detail: format!(
+                        "'{key}' is a CloudFormation intrinsic function and cannot be resolved in ECS task-definition properties. Provide a template where task-definition properties are concrete values (no CloudFormation intrinsics)."
+                    ),
+                });
             }
             for (key, v) in map {
                 detect_intrinsic_functions(v, &format!("{context}.{key}"))?;
@@ -752,6 +758,69 @@ mod tests {
         std::fs::write(&path, minimal_template()).unwrap();
         let td = from_cfn_file(&path, None).unwrap();
         assert_eq!(td.family, "my-app");
+    }
+
+    #[test]
+    fn no_false_positive_intrinsic_in_multi_key_object() {
+        // A user-defined map with "Ref" as one of multiple keys should NOT trigger
+        // intrinsic detection (intrinsics are single-key objects).
+        let json = r#"{
+            "Resources": {
+                "Task": {
+                    "Type": "AWS::ECS::TaskDefinition",
+                    "Properties": {
+                        "Family": "my-app",
+                        "ContainerDefinitions": [
+                            {
+                                "Name": "app",
+                                "Image": "nginx:latest",
+                                "DockerLabels": {
+                                    "Ref": "some-label-value",
+                                    "other": "data"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }"#;
+        let td = from_cfn_json(json, None).unwrap();
+        assert_eq!(td.family, "my-app");
+    }
+
+    #[test]
+    fn error_multiple_resources_sorted() {
+        let json = r#"{
+            "Resources": {
+                "ZetaTask": {
+                    "Type": "AWS::ECS::TaskDefinition",
+                    "Properties": {
+                        "Family": "app-z",
+                        "ContainerDefinitions": [
+                            { "Name": "z", "Image": "z:latest" }
+                        ]
+                    }
+                },
+                "AlphaTask": {
+                    "Type": "AWS::ECS::TaskDefinition",
+                    "Properties": {
+                        "Family": "app-a",
+                        "ContainerDefinitions": [
+                            { "Name": "a", "Image": "a:latest" }
+                        ]
+                    }
+                }
+            }
+        }"#;
+        let err = from_cfn_json(json, None).unwrap_err();
+        let msg = err.to_string();
+        // IDs should be sorted alphabetically regardless of HashMap order
+        let alpha_pos = msg.find("AlphaTask").expect("should contain AlphaTask");
+        let zeta_pos = msg.find("ZetaTask").expect("should contain ZetaTask");
+        assert!(
+            alpha_pos < zeta_pos,
+            "AlphaTask should appear before ZetaTask in sorted output"
+        );
     }
 
     #[test]
