@@ -645,6 +645,36 @@ fn format_container_dry_run(
         }
     }
 
+    if !container.environment_files.is_empty() {
+        output.push_str("  Environment files:\n");
+        for ef in &container.environment_files {
+            let _ = writeln!(output, "    {}", ef.value);
+        }
+    }
+
+    if !container.ulimits.is_empty() {
+        output.push_str("  Ulimits:\n");
+        for u in &container.ulimits {
+            let _ = writeln!(output, "    {}: soft={}, hard={}", u.name, u.soft_limit, u.hard_limit);
+        }
+    }
+
+    if let Some(lp) = &container.linux_parameters {
+        output.push_str("  Linux parameters:\n");
+        if let Some(init) = lp.init_process_enabled {
+            let _ = writeln!(output, "    Init process: {init}");
+        }
+        if let Some(shm) = lp.shared_memory_size {
+            let _ = writeln!(output, "    Shared memory: {shm} MiB");
+        }
+        if !lp.tmpfs.is_empty() {
+            output.push_str("    Tmpfs:\n");
+            for t in &lp.tmpfs {
+                let _ = writeln!(output, "      {} ({} MiB)", t.container_path, t.size);
+            }
+        }
+    }
+
     output
 }
 
@@ -1408,6 +1438,51 @@ mod tests {
         assert!(output.contains("Network: lecs-my-app"));
         assert!(output.contains("Container: my-app-web"));
         assert!(output.contains("Container: my-app-api"));
+    }
+
+    #[test]
+    fn display_dry_run_new_fields() {
+        use crate::taskdef::{
+            EnvironmentFile, LinuxParameters, TmpfsMount, Ulimit,
+        };
+        let td = TaskDefinition {
+            family: "test".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
+            volumes: vec![],
+            container_definitions: vec![ContainerDefinition {
+                name: "app".to_string(),
+                image: "nginx:latest".to_string(),
+                environment_files: vec![EnvironmentFile {
+                    value: "app.env".to_string(),
+                    r#type: "s3".to_string(),
+                }],
+                ulimits: vec![Ulimit {
+                    name: "nofile".to_string(),
+                    soft_limit: 1024,
+                    hard_limit: 4096,
+                }],
+                linux_parameters: Some(LinuxParameters {
+                    init_process_enabled: Some(true),
+                    shared_memory_size: Some(256),
+                    tmpfs: vec![TmpfsMount {
+                        container_path: "/run".to_string(),
+                        size: 64,
+                        mount_options: vec!["rw".to_string()],
+                    }],
+                }),
+                ..Default::default()
+            }],
+        };
+        let output = display_dry_run(&td, &HashSet::new());
+        assert!(output.contains("Environment files:"));
+        assert!(output.contains("app.env"));
+        assert!(output.contains("Ulimits:"));
+        assert!(output.contains("nofile: soft=1024, hard=4096"));
+        assert!(output.contains("Linux parameters:"));
+        assert!(output.contains("Init process: true"));
+        assert!(output.contains("Shared memory: 256 MiB"));
+        assert!(output.contains("/run (64 MiB)"));
     }
 
     #[test]
