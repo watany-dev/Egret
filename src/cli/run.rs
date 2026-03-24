@@ -376,11 +376,11 @@ fn build_container_config(
     volumes: &[Volume],
     auth_token: Option<&str>,
 ) -> ContainerConfig {
-    let mut labels = HashMap::from([
-        ("lecs.managed".into(), "true".into()),
-        ("lecs.task".into(), family.into()),
-        ("lecs.container".into(), def.name.clone()),
-    ]);
+    // Start with user-defined docker labels, then override with lecs management labels
+    let mut labels: HashMap<String, String> = def.docker_labels.clone();
+    labels.insert("lecs.managed".into(), "true".into());
+    labels.insert("lecs.task".into(), family.into());
+    labels.insert("lecs.container".into(), def.name.clone());
 
     // Store secret names for inspect masking
     if !def.secrets.is_empty() {
@@ -528,6 +528,13 @@ fn format_container_dry_run(
 
     if let Some(hc) = &container.health_check {
         let _ = writeln!(output, "  Health check: {}", hc.command.join(" "));
+    }
+
+    if !container.docker_labels.is_empty() {
+        output.push_str("  Docker labels:\n");
+        for (key, val) in &container.docker_labels {
+            let _ = writeln!(output, "    {key}={val}");
+        }
     }
 
     output
@@ -784,6 +791,29 @@ mod tests {
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
         assert_eq!(config.port_mappings[0].container_port, 3000);
+    }
+
+    #[test]
+    fn build_container_config_docker_labels_merged() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            docker_labels: HashMap::from([
+                ("com.example.env".into(), "dev".into()),
+                ("lecs.managed".into(), "user-override".into()),
+            ]),
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+
+        // User labels are included
+        assert_eq!(
+            config.labels.get("com.example.env").unwrap(),
+            "dev"
+        );
+        // Lecs management labels take precedence over user labels
+        assert_eq!(config.labels.get("lecs.managed").unwrap(), "true");
     }
 
     #[test]

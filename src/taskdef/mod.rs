@@ -4,6 +4,7 @@ pub mod cloudformation;
 pub mod diagnostics;
 pub mod terraform;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -142,6 +143,10 @@ pub struct ContainerDefinition {
     /// Mount points referencing task-level volumes.
     #[serde(default)]
     pub mount_points: Vec<MountPoint>,
+
+    /// Docker labels to apply to the container.
+    #[serde(default)]
+    pub docker_labels: HashMap<String, String>,
 }
 
 impl Default for ContainerDefinition {
@@ -161,6 +166,7 @@ impl Default for ContainerDefinition {
             depends_on: Vec::new(),
             health_check: None,
             mount_points: Vec::new(),
+            docker_labels: HashMap::new(),
         }
     }
 }
@@ -1518,5 +1524,39 @@ mod tests {
             matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_docker_labels() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "dockerLabels": {
+                        "com.example.env": "dev",
+                        "com.example.team": "platform"
+                    }
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        let labels = &td.container_definitions[0].docker_labels;
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.get("com.example.env").unwrap(), "dev");
+        assert_eq!(labels.get("com.example.team").unwrap(), "platform");
+    }
+
+    #[test]
+    fn parse_docker_labels_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].docker_labels.is_empty());
     }
 }
