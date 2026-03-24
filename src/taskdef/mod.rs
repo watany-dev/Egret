@@ -4,6 +4,7 @@ pub mod cloudformation;
 pub mod diagnostics;
 pub mod terraform;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -120,15 +121,12 @@ pub struct ContainerDefinition {
     pub secrets: Vec<Secret>,
 
     /// CPU units (1024 = 1 vCPU).
-    #[allow(dead_code)]
     pub cpu: Option<u32>,
 
     /// Hard memory limit (MiB).
-    #[allow(dead_code)]
     pub memory: Option<u32>,
 
     /// Soft memory limit (MiB).
-    #[allow(dead_code)]
     pub memory_reservation: Option<u32>,
 
     /// Container dependencies (startup ordering).
@@ -142,6 +140,52 @@ pub struct ContainerDefinition {
     /// Mount points referencing task-level volumes.
     #[serde(default)]
     pub mount_points: Vec<MountPoint>,
+
+    /// Docker labels to apply to the container.
+    #[serde(default)]
+    pub docker_labels: HashMap<String, String>,
+
+    /// Working directory inside the container.
+    #[serde(default)]
+    pub working_directory: Option<String>,
+
+    /// User to run the container as (e.g., "uid", "uid:gid", "username").
+    #[serde(default)]
+    pub user: Option<String>,
+
+    /// Extra host-to-IP mappings.
+    #[serde(default)]
+    pub extra_hosts: Vec<ExtraHost>,
+
+    /// Timeout in seconds before the container is forcibly killed (ECS default: 30).
+    #[serde(default)]
+    pub stop_timeout: Option<u32>,
+}
+
+impl Default for ContainerDefinition {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            image: String::new(),
+            essential: true,
+            command: Vec::new(),
+            entry_point: Vec::new(),
+            environment: Vec::new(),
+            port_mappings: Vec::new(),
+            secrets: Vec::new(),
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: Vec::new(),
+            health_check: None,
+            mount_points: Vec::new(),
+            docker_labels: HashMap::new(),
+            working_directory: None,
+            user: None,
+            extra_hosts: Vec::new(),
+            stop_timeout: None,
+        }
+    }
 }
 
 const fn default_essential() -> bool {
@@ -262,6 +306,16 @@ pub struct MountPoint {
     /// Mount as read-only (default: false).
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// Extra host-to-IP mapping (ECS extraHosts format).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraHost {
+    /// Hostname to map.
+    pub hostname: String,
+    /// IP address to map to.
+    pub ip_address: String,
 }
 
 const fn default_health_interval() -> u32 {
@@ -488,6 +542,13 @@ impl TaskDefinition {
             }
             if let Some(hc) = &container.health_check {
                 Self::validate_health_check(hc, &container.name)?;
+            }
+            if let Some(wd) = &container.working_directory {
+                Self::validate_path_safety(
+                    wd,
+                    "workingDirectory",
+                    &format!("container '{}'", container.name),
+                )?;
             }
         }
         self.validate_depends_on()?;
@@ -1497,5 +1558,193 @@ mod tests {
             matches!(err, TaskDefError::Validation(ref msg) if msg.contains("invalid character")),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_docker_labels() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "dockerLabels": {
+                        "com.example.env": "dev",
+                        "com.example.team": "platform"
+                    }
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        let labels = &td.container_definitions[0].docker_labels;
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.get("com.example.env").unwrap(), "dev");
+        assert_eq!(labels.get("com.example.team").unwrap(), "platform");
+    }
+
+    #[test]
+    fn parse_docker_labels_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].docker_labels.is_empty());
+    }
+
+    #[test]
+    fn parse_working_directory() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "workingDirectory": "/app"
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(
+            td.container_definitions[0].working_directory.as_deref(),
+            Some("/app")
+        );
+    }
+
+    #[test]
+    fn validate_working_directory_relative_path_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "workingDirectory": "relative/path"
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("absolute path")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_working_directory_traversal_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "workingDirectory": "/app/../etc"
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("path traversal")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_user_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "user": "1000:1000"
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(
+            td.container_definitions[0].user.as_deref(),
+            Some("1000:1000")
+        );
+    }
+
+    #[test]
+    fn parse_user_field_defaults_to_none() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].user.is_none());
+    }
+
+    #[test]
+    fn parse_extra_hosts() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "extraHosts": [
+                        { "hostname": "myhost", "ipAddress": "10.0.0.1" }
+                    ]
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].extra_hosts.len(), 1);
+        assert_eq!(
+            td.container_definitions[0].extra_hosts[0].hostname,
+            "myhost"
+        );
+        assert_eq!(
+            td.container_definitions[0].extra_hosts[0].ip_address,
+            "10.0.0.1"
+        );
+    }
+
+    #[test]
+    fn parse_extra_hosts_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].extra_hosts.is_empty());
+    }
+
+    #[test]
+    fn parse_stop_timeout() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "stopTimeout": 60
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].stop_timeout, Some(60));
+    }
+
+    #[test]
+    fn parse_stop_timeout_defaults_to_none() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].stop_timeout.is_none());
     }
 }

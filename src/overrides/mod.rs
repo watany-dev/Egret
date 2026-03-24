@@ -121,9 +121,6 @@ mod tests {
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),
-                essential: true,
-                command: vec![],
-                entry_point: vec![],
                 environment: vec![Environment {
                     name: "ENV_VAR".to_string(),
                     value: "original".to_string(),
@@ -133,13 +130,7 @@ mod tests {
                     host_port: Some(8080),
                     protocol: "tcp".to_string(),
                 }],
-                secrets: vec![],
-                cpu: None,
-                memory: None,
-                memory_reservation: None,
-                depends_on: vec![],
-                health_check: None,
-                mount_points: vec![],
+                ..Default::default()
             }],
         }
     }

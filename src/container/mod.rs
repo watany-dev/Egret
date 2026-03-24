@@ -42,8 +42,12 @@ pub trait ContainerRuntime: Send + Sync {
     /// Start a container by ID.
     async fn start_container(&self, id: &str) -> Result<(), ContainerError>;
 
-    /// Stop a container by ID.
-    async fn stop_container(&self, id: &str) -> Result<(), ContainerError>;
+    /// Stop a container by ID with an optional timeout in seconds.
+    async fn stop_container(
+        &self,
+        id: &str,
+        timeout_secs: Option<u32>,
+    ) -> Result<(), ContainerError>;
 
     /// Remove a container by ID.
     async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
@@ -71,6 +75,7 @@ pub struct ContainerClient {
 }
 
 /// Container creation configuration.
+#[derive(Default)]
 pub struct ContainerConfig {
     pub name: String,
     pub image: String,
@@ -87,6 +92,16 @@ pub struct ContainerConfig {
     pub health_check: Option<HealthCheckConfig>,
     /// Bind mount volumes (format: `host_path:container_path` or `host_path:container_path:ro`).
     pub binds: Vec<String>,
+    /// Working directory inside the container.
+    pub working_dir: Option<String>,
+    /// User to run the container as.
+    pub user: Option<String>,
+    /// CPU units (1024 = 1 vCPU).
+    pub cpu_units: Option<u32>,
+    /// Hard memory limit (MiB).
+    pub memory_mib: Option<u32>,
+    /// Soft memory limit (MiB).
+    pub memory_reservation_mib: Option<u32>,
 }
 
 /// Docker HEALTHCHECK configuration (nanosecond units).
@@ -436,9 +451,14 @@ impl ContainerRuntime for ContainerClient {
         Ok(())
     }
 
-    async fn stop_container(&self, id: &str) -> Result<(), ContainerError> {
+    async fn stop_container(
+        &self,
+        id: &str,
+        timeout_secs: Option<u32>,
+    ) -> Result<(), ContainerError> {
+        let t = timeout_secs.map_or(30, i64::from);
         self.docker
-            .stop_container(id, Some(StopContainerOptions { t: 10 }))
+            .stop_container(id, Some(StopContainerOptions { t }))
             .await?;
         Ok(())
     }
@@ -707,6 +727,13 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         port_bindings: Some(port_bindings),
         extra_hosts,
         binds,
+        nano_cpus: config
+            .cpu_units
+            .map(|cpu| i64::from(cpu) * 1_000_000_000 / 1024),
+        memory: config.memory_mib.map(|m| i64::from(m) * 1024 * 1024),
+        memory_reservation: config
+            .memory_reservation_mib
+            .map(|m| i64::from(m) * 1024 * 1024),
         ..Default::default()
     };
 
@@ -747,6 +774,8 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         networking_config: Some(networking_config),
         labels: Some(config.labels.clone()),
         healthcheck,
+        working_dir: config.working_dir.clone(),
+        user: config.user.clone(),
         ..Default::default()
     }
 }
@@ -831,7 +860,11 @@ pub mod test_support {
             pop_result(&self.start_container_results)
         }
 
-        async fn stop_container(&self, _id: &str) -> Result<(), ContainerError> {
+        async fn stop_container(
+            &self,
+            _id: &str,
+            _timeout_secs: Option<u32>,
+        ) -> Result<(), ContainerError> {
             pop_result(&self.stop_container_results)
         }
 
@@ -883,9 +916,7 @@ mod tests {
             network: "lecs-test".to_string(),
             network_aliases: vec!["app".to_string()],
             labels: HashMap::from([("lecs.managed".into(), "true".into())]),
-            extra_hosts: vec![],
-            health_check: None,
-            binds: vec![],
+            ..Default::default()
         }
     }
 
@@ -936,22 +967,84 @@ mod tests {
         let config = ContainerConfig {
             name: "min".to_string(),
             image: "alpine".to_string(),
-            command: vec![],
-            entry_point: vec![],
-            env: vec![],
-            port_mappings: vec![],
             network: "net".to_string(),
-            network_aliases: vec![],
-            labels: HashMap::new(),
-            extra_hosts: vec![],
-            health_check: None,
-            binds: vec![],
+            ..Default::default()
         };
         let result = build_bollard_config(&config);
 
         assert!(result.cmd.is_none());
         assert!(result.entrypoint.is_none());
         assert!(result.env.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_with_working_dir() {
+        let mut config = sample_config();
+        config.working_dir = Some("/app".to_string());
+        let result = build_bollard_config(&config);
+        assert_eq!(result.working_dir.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn build_bollard_config_without_working_dir() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        assert!(result.working_dir.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_with_user() {
+        let mut config = sample_config();
+        config.user = Some("1000:1000".to_string());
+        let result = build_bollard_config(&config);
+        assert_eq!(result.user.as_deref(), Some("1000:1000"));
+    }
+
+    #[test]
+    fn build_bollard_config_without_user() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        assert!(result.user.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_cpu_conversion() {
+        let mut config = sample_config();
+        config.cpu_units = Some(256);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        // 256 * 1_000_000_000 / 1024 = 250_000_000
+        assert_eq!(hc.nano_cpus, Some(250_000_000));
+    }
+
+    #[test]
+    fn build_bollard_config_memory_conversion() {
+        let mut config = sample_config();
+        config.memory_mib = Some(512);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        // 512 * 1024 * 1024 = 536_870_912
+        assert_eq!(hc.memory, Some(536_870_912));
+    }
+
+    #[test]
+    fn build_bollard_config_memory_reservation_conversion() {
+        let mut config = sample_config();
+        config.memory_reservation_mib = Some(256);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        // 256 * 1024 * 1024 = 268_435_456
+        assert_eq!(hc.memory_reservation, Some(268_435_456));
+    }
+
+    #[test]
+    fn build_bollard_config_no_resource_limits() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(hc.nano_cpus.is_none());
+        assert!(hc.memory.is_none());
+        assert!(hc.memory_reservation.is_none());
     }
 
     #[test]

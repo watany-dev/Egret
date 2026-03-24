@@ -923,16 +923,9 @@ mod tests {
             config: ContainerConfig {
                 name: format!("test-{name}"),
                 image: "alpine:latest".to_string(),
-                command: vec![],
-                entry_point: vec![],
-                env: vec![],
-                port_mappings: vec![],
                 network: "lecs-test".to_string(),
                 network_aliases: vec![name.to_string()],
-                labels: HashMap::new(),
-                extra_hosts: vec![],
-                health_check: None,
-                binds: vec![],
+                ..Default::default()
             },
             depends_on: depends
                 .iter()
