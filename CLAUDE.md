@@ -29,7 +29,7 @@ cargo install cargo-deny
 ## Architecture
 
 - `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, inspect, stats, history, diff, watch, completions, version
-- `src/taskdef/` — ECS task definition JSON parser, types, validation diagnostics, and Terraform input converter
+- `src/taskdef/` — ECS task definition JSON parser, types, validation diagnostics, Terraform input converter, and CloudFormation/CDK template converter
 - `src/container/` — OCI container runtime client (bollard, Docker/Podman)
 - `src/overrides/` — Local override configuration
 - `src/secrets/` — Secrets local resolver

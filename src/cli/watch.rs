@@ -10,16 +10,19 @@ use anyhow::{Result, bail};
 use super::WatchArgs;
 use crate::profile::ResolvedPaths;
 
-/// Return the input file path (either task definition or Terraform file).
+/// Return the input file path (task definition, Terraform, or `CloudFormation` file).
 ///
 /// # Errors
 ///
-/// Returns an error if neither `--task-definition` nor `--from-tf` is provided.
+/// Returns an error if none of `--task-definition`, `--from-tf`, or `--from-cfn` is provided.
 fn input_path(args: &WatchArgs) -> Result<&std::path::Path> {
     args.task_definition
         .as_deref()
         .or(args.from_tf.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))
+        .or(args.from_cfn.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
+        })
 }
 
 /// Collect all paths that should be watched for changes.
@@ -211,7 +214,7 @@ async fn load_and_run_task(
 ) -> Result<WatchTaskState> {
     use crate::overrides::OverrideConfig;
     use crate::secrets::SecretsResolver;
-    use crate::taskdef::{Environment, TaskDefinition, terraform};
+    use crate::taskdef::{Environment, TaskDefinition, cloudformation, terraform};
 
     let path = input_path(args)?;
 
@@ -224,6 +227,8 @@ async fn load_and_run_task(
 
     let mut task_def = if let Some(tf_path) = &args.from_tf {
         terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())?
+    } else if let Some(cfn_path) = &args.from_cfn {
+        cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())?
     } else {
         TaskDefinition::from_file(path)?
     };
@@ -310,6 +315,8 @@ mod tests {
             task_definition: Some(task_def),
             from_tf: None,
             tf_resource: None,
+            from_cfn: None,
+            cfn_resource: None,
             r#override: override_path,
             secrets: secrets_path,
             profile: None,
@@ -419,6 +426,8 @@ mod tests {
             task_definition: None,
             from_tf: Some(tf_path),
             tf_resource,
+            from_cfn: None,
+            cfn_resource: None,
             r#override: override_path,
             secrets: secrets_path,
             profile: None,

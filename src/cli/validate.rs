@@ -7,7 +7,7 @@ use crate::profile;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::TaskDefinition;
 use crate::taskdef::diagnostics::{self, Severity, ValidationDiagnostic, ValidationReport};
-use crate::taskdef::terraform;
+use crate::taskdef::{cloudformation, terraform};
 
 use super::ValidateArgs;
 
@@ -19,7 +19,10 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
         .task_definition
         .as_deref()
         .or(args.from_tf.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))?;
+        .or(args.from_cfn.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
+        })?;
 
     // Resolve profile paths
     let resolved = profile::resolve_from_args(
@@ -33,6 +36,26 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
         // Use from_terraform_file() to enforce file size limits and consistent error handling.
         let task_def = terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())
             .context("validation failed: could not parse Terraform JSON")?;
+        return execute_validated_task_def(
+            &task_def,
+            resolved
+                .override_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .as_deref(),
+            resolved
+                .secrets_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .as_deref(),
+        );
+    }
+
+    if let Some(cfn_path) = &args.from_cfn {
+        let task_def = cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())
+            .context("validation failed: could not parse CloudFormation template")?;
         return execute_validated_task_def(
             &task_def,
             resolved
