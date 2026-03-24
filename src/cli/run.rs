@@ -267,7 +267,7 @@ pub async fn cleanup(
     family: &str,
 ) {
     for (id, name) in containers {
-        if let Err(e) = client.stop_container(id).await {
+        if let Err(e) = client.stop_container(id, None).await {
             tracing::warn!(container = %name, error = %e, "Failed to stop container");
         }
         if let Err(e) = client.remove_container(id).await {
@@ -367,7 +367,7 @@ fn resolve_binds(mount_points: &[MountPoint], volumes: &[Volume]) -> Vec<String>
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn build_container_config(
     family: &str,
     def: &ContainerDefinition,
@@ -386,6 +386,11 @@ fn build_container_config(
     if !def.secrets.is_empty() {
         let secret_names: Vec<String> = def.secrets.iter().map(|s| s.name.clone()).collect();
         labels.insert("lecs.secrets".into(), secret_names.join(","));
+    }
+
+    // Store stop timeout for cleanup
+    if let Some(timeout) = def.stop_timeout {
+        labels.insert("lecs.stop_timeout".into(), timeout.to_string());
     }
 
     // Store dependency info for ps display
@@ -554,7 +559,14 @@ fn format_container_dry_run(
         let _ = writeln!(output, "  User: {user}");
     }
 
-    if container.cpu.is_some() || container.memory.is_some() || container.memory_reservation.is_some() {
+    if let Some(timeout) = container.stop_timeout {
+        let _ = writeln!(output, "  Stop timeout: {timeout}s");
+    }
+
+    if container.cpu.is_some()
+        || container.memory.is_some()
+        || container.memory_reservation.is_some()
+    {
         output.push_str("  Resources:\n");
         if let Some(cpu) = container.cpu {
             let _ = writeln!(output, "    CPU: {cpu} units");
@@ -590,8 +602,7 @@ mod tests {
     use crate::container::test_support::MockContainerClient;
     use crate::taskdef::{
         ContainerDefinition, DependencyCondition, DependsOn, Environment, ExtraHost, MountPoint,
-        PortMapping,
-        Volume, VolumeHost,
+        PortMapping, Volume, VolumeHost,
     };
 
     fn single_container_taskdef() -> TaskDefinition {
@@ -846,10 +857,7 @@ mod tests {
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
 
         // User labels are included
-        assert_eq!(
-            config.labels.get("com.example.env").unwrap(),
-            "dev"
-        );
+        assert_eq!(config.labels.get("com.example.env").unwrap(), "dev");
         // Lecs management labels take precedence over user labels
         assert_eq!(config.labels.get("lecs.managed").unwrap(), "true");
     }
@@ -869,9 +877,11 @@ mod tests {
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
         assert!(config.extra_hosts.contains(&"myhost:10.0.0.1".to_string()));
         // Default host.docker.internal should still be present
-        assert!(config
-            .extra_hosts
-            .contains(&"host.docker.internal:host-gateway".to_string()));
+        assert!(
+            config
+                .extra_hosts
+                .contains(&"host.docker.internal:host-gateway".to_string())
+        );
     }
 
     #[test]
@@ -887,10 +897,7 @@ mod tests {
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
-        assert_eq!(
-            config.extra_hosts,
-            vec!["host.docker.internal:192.168.1.1"]
-        );
+        assert_eq!(config.extra_hosts, vec!["host.docker.internal:192.168.1.1"]);
     }
 
     #[test]

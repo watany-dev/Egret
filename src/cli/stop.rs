@@ -32,7 +32,7 @@ pub async fn execute_with_client(
     }
 
     for container in &containers {
-        if let Err(e) = client.stop_container(&container.id).await {
+        if let Err(e) = client.stop_container(&container.id, None).await {
             tracing::warn!(container = %container.name, error = %e, "Failed to stop container");
         }
         if let Err(e) = client.remove_container(&container.id).await {

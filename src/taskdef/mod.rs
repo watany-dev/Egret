@@ -156,6 +156,10 @@ pub struct ContainerDefinition {
     /// Extra host-to-IP mappings.
     #[serde(default)]
     pub extra_hosts: Vec<ExtraHost>,
+
+    /// Timeout in seconds before the container is forcibly killed (ECS default: 30).
+    #[serde(default)]
+    pub stop_timeout: Option<u32>,
 }
 
 impl Default for ContainerDefinition {
@@ -179,6 +183,7 @@ impl Default for ContainerDefinition {
             working_directory: None,
             user: None,
             extra_hosts: Vec::new(),
+            stop_timeout: None,
         }
     }
 }
@@ -1659,7 +1664,10 @@ mod tests {
             ]
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
-        assert_eq!(td.container_definitions[0].user.as_deref(), Some("1000:1000"));
+        assert_eq!(
+            td.container_definitions[0].user.as_deref(),
+            Some("1000:1000")
+        );
     }
 
     #[test]
@@ -1690,8 +1698,14 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert_eq!(td.container_definitions[0].extra_hosts.len(), 1);
-        assert_eq!(td.container_definitions[0].extra_hosts[0].hostname, "myhost");
-        assert_eq!(td.container_definitions[0].extra_hosts[0].ip_address, "10.0.0.1");
+        assert_eq!(
+            td.container_definitions[0].extra_hosts[0].hostname,
+            "myhost"
+        );
+        assert_eq!(
+            td.container_definitions[0].extra_hosts[0].ip_address,
+            "10.0.0.1"
+        );
     }
 
     #[test]
@@ -1704,5 +1718,33 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert!(td.container_definitions[0].extra_hosts.is_empty());
+    }
+
+    #[test]
+    fn parse_stop_timeout() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "stopTimeout": 60
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].stop_timeout, Some(60));
+    }
+
+    #[test]
+    fn parse_stop_timeout_defaults_to_none() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].stop_timeout.is_none());
     }
 }

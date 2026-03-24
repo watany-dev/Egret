@@ -42,8 +42,12 @@ pub trait ContainerRuntime: Send + Sync {
     /// Start a container by ID.
     async fn start_container(&self, id: &str) -> Result<(), ContainerError>;
 
-    /// Stop a container by ID.
-    async fn stop_container(&self, id: &str) -> Result<(), ContainerError>;
+    /// Stop a container by ID with an optional timeout in seconds.
+    async fn stop_container(
+        &self,
+        id: &str,
+        timeout_secs: Option<u32>,
+    ) -> Result<(), ContainerError>;
 
     /// Remove a container by ID.
     async fn remove_container(&self, id: &str) -> Result<(), ContainerError>;
@@ -71,6 +75,7 @@ pub struct ContainerClient {
 }
 
 /// Container creation configuration.
+#[derive(Default)]
 pub struct ContainerConfig {
     pub name: String,
     pub image: String,
@@ -97,30 +102,6 @@ pub struct ContainerConfig {
     pub memory_mib: Option<u32>,
     /// Soft memory limit (MiB).
     pub memory_reservation_mib: Option<u32>,
-}
-
-impl Default for ContainerConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            image: String::new(),
-            command: Vec::new(),
-            entry_point: Vec::new(),
-            env: Vec::new(),
-            port_mappings: Vec::new(),
-            network: String::new(),
-            network_aliases: Vec::new(),
-            labels: HashMap::new(),
-            extra_hosts: Vec::new(),
-            health_check: None,
-            binds: Vec::new(),
-            working_dir: None,
-            user: None,
-            cpu_units: None,
-            memory_mib: None,
-            memory_reservation_mib: None,
-        }
-    }
 }
 
 /// Docker HEALTHCHECK configuration (nanosecond units).
@@ -470,9 +451,14 @@ impl ContainerRuntime for ContainerClient {
         Ok(())
     }
 
-    async fn stop_container(&self, id: &str) -> Result<(), ContainerError> {
+    async fn stop_container(
+        &self,
+        id: &str,
+        timeout_secs: Option<u32>,
+    ) -> Result<(), ContainerError> {
+        let t = timeout_secs.map_or(30, i64::from);
         self.docker
-            .stop_container(id, Some(StopContainerOptions { t: 10 }))
+            .stop_container(id, Some(StopContainerOptions { t }))
             .await?;
         Ok(())
     }
@@ -744,9 +730,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         nano_cpus: config
             .cpu_units
             .map(|cpu| i64::from(cpu) * 1_000_000_000 / 1024),
-        memory: config
-            .memory_mib
-            .map(|m| i64::from(m) * 1024 * 1024),
+        memory: config.memory_mib.map(|m| i64::from(m) * 1024 * 1024),
         memory_reservation: config
             .memory_reservation_mib
             .map(|m| i64::from(m) * 1024 * 1024),
@@ -876,7 +860,11 @@ pub mod test_support {
             pop_result(&self.start_container_results)
         }
 
-        async fn stop_container(&self, _id: &str) -> Result<(), ContainerError> {
+        async fn stop_container(
+            &self,
+            _id: &str,
+            _timeout_secs: Option<u32>,
+        ) -> Result<(), ContainerError> {
             pop_result(&self.stop_container_results)
         }
 
