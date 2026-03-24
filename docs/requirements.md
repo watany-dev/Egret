@@ -166,10 +166,10 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 
 | ID | 要件 | 状態 |
 |----|------|------|
-| FR-16.1 | `lecs exec <container> [-- command]` でコンテナ内コマンドを実行できる（デフォルト `/bin/sh`） | 未実装 |
-| FR-16.2 | `environmentFiles` フィールドでローカル .env ファイルから環境変数を読み込める | 未実装 |
-| FR-16.3 | `ulimits` フィールドをコンテナのリソースリミットに反映する | 未実装 |
-| FR-16.4 | `linuxParameters` の主要フィールド（`initProcessEnabled`, `tmpfs`, `sharedMemorySize`）に対応する | 未実装 |
+| FR-16.1 | `lecs exec <container> [-- command]` でコンテナ内コマンドを実行できる（デフォルト `/bin/sh`） | ✅ 実装済み |
+| FR-16.2 | `environmentFiles` フィールドでローカル .env ファイルから環境変数を読み込める | ✅ 実装済み |
+| FR-16.3 | `ulimits` フィールドをコンテナのリソースリミットに反映する | ✅ 実装済み |
+| FR-16.4 | `linuxParameters` の主要フィールド（`initProcessEnabled`, `tmpfs`, `sharedMemorySize`）に対応する | ✅ 実装済み |
 
 ### FR-17: サービスモード MVP
 
