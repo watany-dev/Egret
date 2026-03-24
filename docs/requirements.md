@@ -155,21 +155,21 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 
 | ID | 要件 | 状態 |
 |----|------|------|
-| FR-15.1 | パース済みの `cpu` / `memory` / `memoryReservation` をコンテナリソース制限として適用する | 未実装 |
-| FR-15.2 | `workingDirectory` フィールドをコンテナの作業ディレクトリに設定する | 未実装 |
-| FR-15.3 | `user` フィールドをコンテナの実行ユーザーに設定する | 未実装 |
-| FR-15.4 | `stopTimeout` フィールドをグレースフルシャットダウンのタイムアウトに反映する（現在ハードコード 10 秒） | 未実装 |
-| FR-15.5 | `dockerLabels` をユーザー定義ラベルとして lecs 管理ラベルとマージする（lecs ラベル優先） | 未実装 |
-| FR-15.6 | `extraHosts` をユーザー定義の host-to-IP マッピングとして `host.docker.internal` と結合する | 未実装 |
+| FR-15.1 | パース済みの `cpu` / `memory` / `memoryReservation` をコンテナリソース制限として適用する | ✅ 実装済み |
+| FR-15.2 | `workingDirectory` フィールドをコンテナの作業ディレクトリに設定する | ✅ 実装済み |
+| FR-15.3 | `user` フィールドをコンテナの実行ユーザーに設定する | ✅ 実装済み |
+| FR-15.4 | `stopTimeout` フィールドをグレースフルシャットダウンのタイムアウトに反映する（現在ハードコード 10 秒） | ✅ 実装済み |
+| FR-15.5 | `dockerLabels` をユーザー定義ラベルとして lecs 管理ラベルとマージする（lecs ラベル優先） | ✅ 実装済み |
+| FR-15.6 | `extraHosts` をユーザー定義の host-to-IP マッピングとして `host.docker.internal` と結合する | ✅ 実装済み |
 
 ### FR-16: ECS Exec + 環境変数拡張
 
 | ID | 要件 | 状態 |
 |----|------|------|
-| FR-16.1 | `lecs exec <container> [-- command]` でコンテナ内コマンドを実行できる（デフォルト `/bin/sh`） | 未実装 |
-| FR-16.2 | `environmentFiles` フィールドでローカル .env ファイルから環境変数を読み込める | 未実装 |
-| FR-16.3 | `ulimits` フィールドをコンテナのリソースリミットに反映する | 未実装 |
-| FR-16.4 | `linuxParameters` の主要フィールド（`initProcessEnabled`, `tmpfs`, `sharedMemorySize`）に対応する | 未実装 |
+| FR-16.1 | `lecs exec <container> [-- command]` でコンテナ内コマンドを実行できる（デフォルト `/bin/sh`） | ✅ 実装済み |
+| FR-16.2 | `environmentFiles` フィールドでローカル .env ファイルから環境変数を読み込める | ✅ 実装済み |
+| FR-16.3 | `ulimits` フィールドをコンテナのリソースリミットに反映する | ✅ 実装済み |
+| FR-16.4 | `linuxParameters` の主要フィールド（`initProcessEnabled`, `tmpfs`, `sharedMemorySize`）に対応する | ✅ 実装済み |
 
 ### FR-17: サービスモード MVP
 

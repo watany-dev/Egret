@@ -59,6 +59,20 @@ pub enum TaskDefError {
 
     #[error("CloudFormation intrinsic function found in {field}: {detail}")]
     CfnIntrinsicFunction { field: String, detail: String },
+
+    #[error("failed to read environment file {path}: {source}")]
+    EnvironmentFileRead {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[allow(dead_code)]
+    #[error("invalid line in environment file {path} at line {line_number}: {detail}")]
+    EnvironmentFileParse {
+        path: PathBuf,
+        line_number: usize,
+        detail: String,
+    },
 }
 
 /// ECS task definition top-level structure.
@@ -160,6 +174,18 @@ pub struct ContainerDefinition {
     /// Timeout in seconds before the container is forcibly killed (ECS default: 30).
     #[serde(default)]
     pub stop_timeout: Option<u32>,
+
+    /// Paths to environment files (.env format) for additional environment variables.
+    #[serde(default)]
+    pub environment_files: Vec<EnvironmentFile>,
+
+    /// Resource limits (ulimits) for the container.
+    #[serde(default)]
+    pub ulimits: Vec<Ulimit>,
+
+    /// Linux-specific parameters.
+    #[serde(default)]
+    pub linux_parameters: Option<LinuxParameters>,
 }
 
 impl Default for ContainerDefinition {
@@ -184,6 +210,9 @@ impl Default for ContainerDefinition {
             user: None,
             extra_hosts: Vec::new(),
             stop_timeout: None,
+            environment_files: Vec::new(),
+            ulimits: Vec::new(),
+            linux_parameters: None,
         }
     }
 }
@@ -316,6 +345,120 @@ pub struct ExtraHost {
     pub hostname: String,
     /// IP address to map to.
     pub ip_address: String,
+}
+
+/// Environment file reference (ECS environmentFiles format).
+///
+/// In ECS, `value` is an S3 ARN. Lecs treats it as a local file path
+/// and loads `.env`-formatted key-value pairs from it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentFile {
+    /// File path (S3 ARN in ECS; local path in Lecs).
+    pub value: String,
+    /// File type — always "s3" in ECS. Lecs ignores this field but
+    /// preserves it for ECS task definition round-trip compatibility.
+    #[serde(default = "default_env_file_type")]
+    #[allow(dead_code)]
+    pub r#type: String,
+}
+
+fn default_env_file_type() -> String {
+    "s3".to_string()
+}
+
+/// Resource limit (ulimit) for a container.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ulimit {
+    /// Ulimit name (e.g., "nofile", "memlock", "nproc").
+    pub name: String,
+    /// Soft limit.
+    pub soft_limit: i64,
+    /// Hard limit.
+    pub hard_limit: i64,
+}
+
+/// Linux-specific parameters for a container.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinuxParameters {
+    /// Run an init process inside the container (PID 1 reaper).
+    #[serde(default)]
+    pub init_process_enabled: Option<bool>,
+    /// Size of `/dev/shm` in MiB.
+    #[serde(default)]
+    pub shared_memory_size: Option<i64>,
+    /// Tmpfs mounts inside the container.
+    #[serde(default)]
+    pub tmpfs: Vec<TmpfsMount>,
+}
+
+/// Tmpfs mount specification.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TmpfsMount {
+    /// Absolute path inside the container.
+    pub container_path: String,
+    /// Size in MiB.
+    pub size: i64,
+    /// Mount options (e.g., "rw", "noexec").
+    #[serde(default)]
+    pub mount_options: Vec<String>,
+}
+
+/// Load environment variables from `.env`-formatted files.
+///
+/// Each file is read line by line. Lines starting with `#` are comments,
+/// empty lines are skipped, and lines without `=` are ignored.
+/// Returns key-value pairs in insertion order (earlier files first, then later ones).
+/// Duplicate keys are preserved; the caller is responsible for last-wins semantics.
+pub fn load_environment_files(
+    files: &[EnvironmentFile],
+    base_dir: &Path,
+) -> Result<Vec<(String, String)>, TaskDefError> {
+    let mut vars = Vec::new();
+    for ef in files {
+        let path = base_dir.join(&ef.value);
+        let content =
+            std::fs::read_to_string(&path).map_err(|source| TaskDefError::EnvironmentFileRead {
+                path: path.clone(),
+                source,
+            })?;
+        for (line_number, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let value = value.trim().to_string();
+                // Strip surrounding quotes if present
+                let value = strip_quotes(&value);
+                if !key.is_empty() {
+                    vars.push((key, value));
+                }
+            } else {
+                tracing::warn!(
+                    file = %path.display(),
+                    line = line_number + 1,
+                    "Skipping line without '=' in environment file"
+                );
+            }
+        }
+    }
+    Ok(vars)
+}
+
+/// Strip matching surrounding single or double quotes from a value.
+fn strip_quotes(s: &str) -> String {
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
+    {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 const fn default_health_interval() -> u32 {
@@ -1746,5 +1889,273 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert!(td.container_definitions[0].stop_timeout.is_none());
+    }
+
+    // --- environmentFiles tests ---
+
+    #[test]
+    fn parse_environment_files_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environmentFiles": [
+                    { "value": "app.env", "type": "s3" }
+                ]
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].environment_files.len(), 1);
+        assert_eq!(
+            td.container_definitions[0].environment_files[0].value,
+            "app.env"
+        );
+        assert_eq!(
+            td.container_definitions[0].environment_files[0].r#type,
+            "s3"
+        );
+    }
+
+    #[test]
+    fn parse_environment_files_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{ "name": "app", "image": "nginx:latest" }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].environment_files.is_empty());
+    }
+
+    #[test]
+    fn parse_environment_files_type_defaults_to_s3() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environmentFiles": [{ "value": "test.env" }]
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(
+            td.container_definitions[0].environment_files[0].r#type,
+            "s3"
+        );
+    }
+
+    #[test]
+    fn load_environment_files_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.env"), "FOO=bar\nBAZ=qux\n").unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(
+            vars,
+            vec![
+                ("FOO".to_string(), "bar".to_string()),
+                ("BAZ".to_string(), "qux".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn load_environment_files_comments_and_empty_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.env"),
+            "# This is a comment\n\nFOO=bar\n  \n# Another comment\nBAZ=qux\n",
+        )
+        .unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0], ("FOO".to_string(), "bar".to_string()));
+    }
+
+    #[test]
+    fn load_environment_files_quoted_values() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.env"),
+            "FOO=\"hello world\"\nBAR='single quoted'\n",
+        )
+        .unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(vars[0], ("FOO".to_string(), "hello world".to_string()));
+        assert_eq!(vars[1], ("BAR".to_string(), "single quoted".to_string()));
+    }
+
+    #[test]
+    fn load_environment_files_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![EnvironmentFile {
+            value: "nonexistent.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let result = load_environment_files(&files, dir.path());
+        assert!(matches!(
+            result,
+            Err(TaskDefError::EnvironmentFileRead { .. })
+        ));
+    }
+
+    #[test]
+    fn load_environment_files_value_with_equals() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.env"),
+            "CONNECTION=host=db;port=5432\n",
+        )
+        .unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(
+            vars[0],
+            ("CONNECTION".to_string(), "host=db;port=5432".to_string())
+        );
+    }
+
+    #[test]
+    fn load_environment_files_multiple_files_ordering() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.env"), "FOO=first\nBAR=a\n").unwrap();
+        std::fs::write(dir.path().join("b.env"), "FOO=second\nBAZ=b\n").unwrap();
+        let files = vec![
+            EnvironmentFile {
+                value: "a.env".to_string(),
+                r#type: "s3".to_string(),
+            },
+            EnvironmentFile {
+                value: "b.env".to_string(),
+                r#type: "s3".to_string(),
+            },
+        ];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        // Both FOO entries are present; the caller decides override order
+        assert_eq!(vars.len(), 4);
+        assert_eq!(vars[0].0, "FOO");
+        assert_eq!(vars[0].1, "first");
+        assert_eq!(vars[2].0, "FOO");
+        assert_eq!(vars[2].1, "second");
+    }
+
+    // --- linuxParameters tests ---
+
+    #[test]
+    fn parse_linux_parameters_full() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "linuxParameters": {
+                    "initProcessEnabled": true,
+                    "sharedMemorySize": 256,
+                    "tmpfs": [{
+                        "containerPath": "/run",
+                        "size": 64,
+                        "mountOptions": ["rw", "noexec"]
+                    }]
+                }
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        let lp = td.container_definitions[0]
+            .linux_parameters
+            .as_ref()
+            .unwrap();
+        assert_eq!(lp.init_process_enabled, Some(true));
+        assert_eq!(lp.shared_memory_size, Some(256));
+        assert_eq!(lp.tmpfs.len(), 1);
+        assert_eq!(lp.tmpfs[0].container_path, "/run");
+        assert_eq!(lp.tmpfs[0].size, 64);
+        assert_eq!(lp.tmpfs[0].mount_options, vec!["rw", "noexec"]);
+    }
+
+    #[test]
+    fn parse_linux_parameters_partial_init_only() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "linuxParameters": { "initProcessEnabled": true }
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        let lp = td.container_definitions[0]
+            .linux_parameters
+            .as_ref()
+            .unwrap();
+        assert_eq!(lp.init_process_enabled, Some(true));
+        assert!(lp.shared_memory_size.is_none());
+        assert!(lp.tmpfs.is_empty());
+    }
+
+    #[test]
+    fn parse_linux_parameters_defaults_to_none() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{ "name": "app", "image": "nginx:latest" }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].linux_parameters.is_none());
+    }
+
+    // --- ulimits tests ---
+
+    #[test]
+    fn parse_ulimits_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "ulimits": [
+                    { "name": "nofile", "softLimit": 1024, "hardLimit": 4096 },
+                    { "name": "memlock", "softLimit": -1, "hardLimit": -1 }
+                ]
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].ulimits.len(), 2);
+        assert_eq!(td.container_definitions[0].ulimits[0].name, "nofile");
+        assert_eq!(td.container_definitions[0].ulimits[0].soft_limit, 1024);
+        assert_eq!(td.container_definitions[0].ulimits[0].hard_limit, 4096);
+        assert_eq!(td.container_definitions[0].ulimits[1].name, "memlock");
+        assert_eq!(td.container_definitions[0].ulimits[1].soft_limit, -1);
+    }
+
+    #[test]
+    fn parse_ulimits_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{ "name": "app", "image": "nginx:latest" }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].ulimits.is_empty());
+    }
+
+    #[test]
+    fn strip_quotes_removes_matching_quotes() {
+        assert_eq!(strip_quotes("\"hello\""), "hello");
+        assert_eq!(strip_quotes("'hello'"), "hello");
+        assert_eq!(strip_quotes("hello"), "hello");
+        assert_eq!(strip_quotes("\"mismatched'"), "\"mismatched'");
+        assert_eq!(strip_quotes("\"\""), "");
     }
 }

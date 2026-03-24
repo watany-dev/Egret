@@ -1,6 +1,7 @@
 //! CLI command definitions and argument parsing.
 
 pub mod completions;
+pub mod exec;
 pub mod format;
 pub mod init;
 pub mod inspect;
@@ -53,12 +54,23 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Watch files and auto-restart on changes
     Watch(WatchArgs),
+    /// Execute a command in a running container
+    Exec(ExecArgs),
 }
 
 #[derive(Parser)]
 pub struct CompletionsArgs {
     /// Shell type (bash, zsh, fish)
     pub shell: clap_complete::Shell,
+}
+
+#[derive(Parser)]
+pub struct ExecArgs {
+    /// Container name (exact or partial match)
+    pub container: String,
+    /// Command to execute (default: /bin/sh)
+    #[arg(last = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -945,6 +957,38 @@ mod tests {
             }
             _ => panic!("expected Validate command"),
         }
+    }
+
+    #[test]
+    fn parse_exec_no_command() {
+        let cli = Cli::try_parse_from(["lecs", "exec", "app"]).expect("should parse");
+        match cli.command {
+            Command::Exec(args) => {
+                assert_eq!(args.container, "app");
+                assert!(args.command.is_empty());
+            }
+            _ => panic!("expected Exec command"),
+        }
+    }
+
+    #[test]
+    fn parse_exec_with_double_dash() {
+        let cli =
+            Cli::try_parse_from(["lecs", "exec", "app", "--", "ls", "-la"]).expect("should parse");
+        match cli.command {
+            Command::Exec(args) => {
+                assert_eq!(args.container, "app");
+                assert_eq!(args.command, vec!["ls", "-la"]);
+            }
+            _ => panic!("expected Exec command"),
+        }
+    }
+
+    #[test]
+    fn parse_exec_hyphen_args_require_double_dash() {
+        // -la is interpreted as a flag without --, so this should fail
+        let result = Cli::try_parse_from(["lecs", "exec", "app", "-la"]);
+        assert!(result.is_err(), "hyphen-prefixed args need -- separator");
     }
 
     #[test]

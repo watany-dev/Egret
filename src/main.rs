@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
         cli::Command::Version => cli::version::execute(),
         cli::Command::Completions(args) => cli::completions::execute(&args),
         cli::Command::Watch(args) => cli::watch::execute(&args, cli.host.as_deref()).await?,
+        cli::Command::Exec(args) => cli::exec::execute(&args, cli.host.as_deref()).await?,
     }
 
     Ok(())

@@ -82,6 +82,29 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         );
     }
 
+    // Load environment files (.env format) if specified in container definitions
+    let base_dir = input_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    for container in &mut task_def.container_definitions {
+        if !container.environment_files.is_empty() {
+            let env_vars =
+                crate::taskdef::load_environment_files(&container.environment_files, base_dir)?;
+            // environmentFiles are loaded first; explicit environment entries override them.
+            // We prepend env file vars so that container.environment (appended later) wins.
+            let existing: Vec<Environment> = std::mem::take(&mut container.environment);
+            for (name, value) in env_vars {
+                container.environment.push(Environment { name, value });
+            }
+            // Re-append existing environment entries so they take precedence
+            container.environment.extend(existing);
+            tracing::info!(
+                container = %container.name,
+                "Loaded environment files"
+            );
+        }
+    }
+
     // Dry-run: display resolved configuration and exit
     if args.dry_run {
         let secret_names: HashSet<String> = task_def
@@ -474,6 +497,42 @@ fn build_container_config(
         cpu_units: def.cpu,
         memory_mib: def.memory,
         memory_reservation_mib: def.memory_reservation,
+        ulimits: def
+            .ulimits
+            .iter()
+            .map(|u| crate::container::UlimitConfig {
+                name: u.name.clone(),
+                soft: u.soft_limit,
+                hard: u.hard_limit,
+            })
+            .collect(),
+        init: def
+            .linux_parameters
+            .as_ref()
+            .and_then(|lp| lp.init_process_enabled),
+        shm_size: def
+            .linux_parameters
+            .as_ref()
+            .and_then(|lp| lp.shared_memory_size)
+            .map(|mib| mib * 1024 * 1024),
+        tmpfs: def
+            .linux_parameters
+            .as_ref()
+            .map(|lp| {
+                lp.tmpfs
+                    .iter()
+                    .map(|t| {
+                        let size_bytes = t.size * 1024 * 1024;
+                        let mut opts = format!("size={size_bytes}");
+                        for opt in &t.mount_options {
+                            opts.push(',');
+                            opts.push_str(opt);
+                        }
+                        (t.container_path.clone(), opts)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -586,7 +645,48 @@ fn format_container_dry_run(
         }
     }
 
+    format_dry_run_extended_fields(&mut output, container);
+
     output
+}
+
+/// Format extended task definition fields (environmentFiles, ulimits, linuxParameters) for dry-run.
+fn format_dry_run_extended_fields(output: &mut String, container: &ContainerDefinition) {
+    use std::fmt::Write;
+
+    if !container.environment_files.is_empty() {
+        output.push_str("  Environment files:\n");
+        for ef in &container.environment_files {
+            let _ = writeln!(output, "    {}", ef.value);
+        }
+    }
+
+    if !container.ulimits.is_empty() {
+        output.push_str("  Ulimits:\n");
+        for u in &container.ulimits {
+            let _ = writeln!(
+                output,
+                "    {}: soft={}, hard={}",
+                u.name, u.soft_limit, u.hard_limit
+            );
+        }
+    }
+
+    if let Some(lp) = &container.linux_parameters {
+        output.push_str("  Linux parameters:\n");
+        if let Some(init) = lp.init_process_enabled {
+            let _ = writeln!(output, "    Init process: {init}");
+        }
+        if let Some(shm) = lp.shared_memory_size {
+            let _ = writeln!(output, "    Shared memory: {shm} MiB");
+        }
+        if !lp.tmpfs.is_empty() {
+            output.push_str("    Tmpfs:\n");
+            for t in &lp.tmpfs {
+                let _ = writeln!(output, "      {} ({} MiB)", t.container_path, t.size);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1349,6 +1449,49 @@ mod tests {
         assert!(output.contains("Network: lecs-my-app"));
         assert!(output.contains("Container: my-app-web"));
         assert!(output.contains("Container: my-app-api"));
+    }
+
+    #[test]
+    fn display_dry_run_new_fields() {
+        use crate::taskdef::{EnvironmentFile, LinuxParameters, TmpfsMount, Ulimit};
+        let td = TaskDefinition {
+            family: "test".to_string(),
+            task_role_arn: None,
+            execution_role_arn: None,
+            volumes: vec![],
+            container_definitions: vec![ContainerDefinition {
+                name: "app".to_string(),
+                image: "nginx:latest".to_string(),
+                environment_files: vec![EnvironmentFile {
+                    value: "app.env".to_string(),
+                    r#type: "s3".to_string(),
+                }],
+                ulimits: vec![Ulimit {
+                    name: "nofile".to_string(),
+                    soft_limit: 1024,
+                    hard_limit: 4096,
+                }],
+                linux_parameters: Some(LinuxParameters {
+                    init_process_enabled: Some(true),
+                    shared_memory_size: Some(256),
+                    tmpfs: vec![TmpfsMount {
+                        container_path: "/run".to_string(),
+                        size: 64,
+                        mount_options: vec!["rw".to_string()],
+                    }],
+                }),
+                ..Default::default()
+            }],
+        };
+        let output = display_dry_run(&td, &HashSet::new());
+        assert!(output.contains("Environment files:"));
+        assert!(output.contains("app.env"));
+        assert!(output.contains("Ulimits:"));
+        assert!(output.contains("nofile: soft=1024, hard=4096"));
+        assert!(output.contains("Linux parameters:"));
+        assert!(output.contains("Init process: true"));
+        assert!(output.contains("Shared memory: 256 MiB"));
+        assert!(output.contains("/run (64 MiB)"));
     }
 
     #[test]

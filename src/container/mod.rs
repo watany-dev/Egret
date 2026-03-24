@@ -4,13 +4,15 @@ use std::collections::HashMap;
 
 use bollard::Docker;
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
-    StatsOptions, StopContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
+    RemoveContainerOptions, StatsOptions, StopContainerOptions,
 };
-use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding};
+use bollard::exec::{CreateExecOptions, StartExecResults};
+use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding, ResourcesUlimits};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 
 /// Container runtime errors.
 #[derive(Debug, thiserror::Error)]
@@ -20,6 +22,13 @@ pub enum ContainerError {
 
     #[error("Container runtime API error: {0}")]
     Api(#[from] bollard::errors::Error),
+
+    #[allow(dead_code)]
+    #[error("exec failed on container {container_id}: {detail}")]
+    ExecFailed {
+        container_id: String,
+        detail: String,
+    },
 }
 
 /// Abstraction over container runtime operations for testability.
@@ -67,6 +76,15 @@ pub trait ContainerRuntime: Send + Sync {
     /// Get a single snapshot of resource usage statistics for a container.
     #[allow(dead_code)]
     async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError>;
+
+    /// Execute a command inside a running container.
+    async fn exec_container(&self, id: &str, cmd: &[String]) -> Result<ExecResult, ContainerError>;
+}
+
+/// Result of executing a command inside a container.
+pub struct ExecResult {
+    /// Exit code from the executed command (None if not available).
+    pub exit_code: Option<i64>,
 }
 
 /// Lecs container runtime client wrapping bollard.
@@ -102,6 +120,24 @@ pub struct ContainerConfig {
     pub memory_mib: Option<u32>,
     /// Soft memory limit (MiB).
     pub memory_reservation_mib: Option<u32>,
+    /// Resource limits (ulimits) for the container.
+    pub ulimits: Vec<UlimitConfig>,
+    /// Run an init process inside the container.
+    pub init: Option<bool>,
+    /// Size of `/dev/shm` in bytes.
+    pub shm_size: Option<i64>,
+    /// Tmpfs mounts (path → mount options string).
+    pub tmpfs: HashMap<String, String>,
+}
+
+/// Resource limit (ulimit) configuration for a container.
+pub struct UlimitConfig {
+    /// Ulimit name (e.g., "nofile", "memlock").
+    pub name: String,
+    /// Soft limit.
+    pub soft: i64,
+    /// Hard limit.
+    pub hard: i64,
 }
 
 /// Docker HEALTHCHECK configuration (nanosecond units).
@@ -634,6 +670,50 @@ impl ContainerRuntime for ContainerClient {
             block_write_bytes: block_write,
         })
     }
+
+    #[cfg(not(tarpaulin_include))]
+    #[allow(clippy::print_stdout, clippy::print_stderr)]
+    async fn exec_container(&self, id: &str, cmd: &[String]) -> Result<ExecResult, ContainerError> {
+        let exec = self
+            .docker
+            .create_exec(
+                id,
+                CreateExecOptions::<String> {
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    cmd: Some(cmd.to_vec()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let start_result = self.docker.start_exec(&exec.id, None).await?;
+
+        match start_result {
+            StartExecResults::Attached { output, .. } => {
+                output
+                    .try_for_each(|log| async move {
+                        match log {
+                            LogOutput::StdOut { message } | LogOutput::Console { message } => {
+                                print!("{}", String::from_utf8_lossy(&message));
+                            }
+                            LogOutput::StdErr { message } => {
+                                eprint!("{}", String::from_utf8_lossy(&message));
+                            }
+                            LogOutput::StdIn { .. } => {}
+                        }
+                        Ok(())
+                    })
+                    .await?;
+            }
+            StartExecResults::Detached => {}
+        }
+
+        let inspect = self.docker.inspect_exec(&exec.id).await?;
+        Ok(ExecResult {
+            exit_code: inspect.exit_code,
+        })
+    }
 }
 
 /// Calculate CPU usage percentage from a Docker stats snapshot.
@@ -682,6 +762,60 @@ fn extract_inspect_ports(resp: &bollard::models::ContainerInspectResponse) -> Ve
         .unwrap_or_default()
 }
 
+/// Build the `HostConfig` portion of a bollard container config.
+fn build_host_config(
+    config: &ContainerConfig,
+    port_bindings: HashMap<String, Option<Vec<PortBinding>>>,
+) -> HostConfig {
+    let extra_hosts = if config.extra_hosts.is_empty() {
+        None
+    } else {
+        Some(config.extra_hosts.clone())
+    };
+
+    let binds = if config.binds.is_empty() {
+        None
+    } else {
+        Some(config.binds.clone())
+    };
+
+    HostConfig {
+        port_bindings: Some(port_bindings),
+        extra_hosts,
+        binds,
+        nano_cpus: config
+            .cpu_units
+            .map(|cpu| i64::from(cpu) * 1_000_000_000 / 1024),
+        memory: config.memory_mib.map(|m| i64::from(m) * 1024 * 1024),
+        memory_reservation: config
+            .memory_reservation_mib
+            .map(|m| i64::from(m) * 1024 * 1024),
+        ulimits: if config.ulimits.is_empty() {
+            None
+        } else {
+            Some(
+                config
+                    .ulimits
+                    .iter()
+                    .map(|u| ResourcesUlimits {
+                        name: Some(u.name.clone()),
+                        soft: Some(u.soft),
+                        hard: Some(u.hard),
+                    })
+                    .collect(),
+            )
+        },
+        init: config.init,
+        shm_size: config.shm_size,
+        tmpfs: if config.tmpfs.is_empty() {
+            None
+        } else {
+            Some(config.tmpfs.clone())
+        },
+        ..Default::default()
+    }
+}
+
 /// Build a bollard container `Config` from an Lecs `ContainerConfig`.
 ///
 /// Pure function — no container runtime interaction.
@@ -711,31 +845,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
     };
 
-    let extra_hosts = if config.extra_hosts.is_empty() {
-        None
-    } else {
-        Some(config.extra_hosts.clone())
-    };
-
-    let binds = if config.binds.is_empty() {
-        None
-    } else {
-        Some(config.binds.clone())
-    };
-
-    let host_config = HostConfig {
-        port_bindings: Some(port_bindings),
-        extra_hosts,
-        binds,
-        nano_cpus: config
-            .cpu_units
-            .map(|cpu| i64::from(cpu) * 1_000_000_000 / 1024),
-        memory: config.memory_mib.map(|m| i64::from(m) * 1024 * 1024),
-        memory_reservation: config
-            .memory_reservation_mib
-            .map(|m| i64::from(m) * 1024 * 1024),
-        ..Default::default()
-    };
+    let host_config = build_host_config(config, port_bindings);
 
     let cmd = if config.command.is_empty() {
         None
@@ -801,6 +911,7 @@ pub mod test_support {
         pub inspect_container_results: Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
         pub wait_container_results: Mutex<VecDeque<Result<WaitResult, ContainerError>>>,
         pub stats_container_results: Mutex<VecDeque<Result<ContainerStats, ContainerError>>>,
+        pub exec_container_results: Mutex<VecDeque<Result<ExecResult, ContainerError>>>,
     }
 
     impl MockContainerClient {
@@ -817,6 +928,7 @@ pub mod test_support {
                 inspect_container_results: Mutex::new(VecDeque::new()),
                 wait_container_results: Mutex::new(VecDeque::new()),
                 stats_container_results: Mutex::new(VecDeque::new()),
+                exec_container_results: Mutex::new(VecDeque::new()),
             }
         }
     }
@@ -892,6 +1004,14 @@ pub mod test_support {
 
         async fn stats_container(&self, _id: &str) -> Result<ContainerStats, ContainerError> {
             pop_result(&self.stats_container_results)
+        }
+
+        async fn exec_container(
+            &self,
+            _id: &str,
+            _cmd: &[String],
+        ) -> Result<ExecResult, ContainerError> {
+            pop_result(&self.exec_container_results)
         }
     }
 }
@@ -1045,6 +1165,81 @@ mod tests {
         assert!(hc.nano_cpus.is_none());
         assert!(hc.memory.is_none());
         assert!(hc.memory_reservation.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_ulimits() {
+        let mut config = sample_config();
+        config.ulimits = vec![
+            UlimitConfig {
+                name: "nofile".to_string(),
+                soft: 1024,
+                hard: 4096,
+            },
+            UlimitConfig {
+                name: "memlock".to_string(),
+                soft: -1,
+                hard: -1,
+            },
+        ];
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        let ulimits = hc.ulimits.as_ref().expect("ulimits");
+        assert_eq!(ulimits.len(), 2);
+        assert_eq!(ulimits[0].name.as_deref(), Some("nofile"));
+        assert_eq!(ulimits[0].soft, Some(1024));
+        assert_eq!(ulimits[0].hard, Some(4096));
+        assert_eq!(ulimits[1].name.as_deref(), Some("memlock"));
+        assert_eq!(ulimits[1].soft, Some(-1));
+    }
+
+    #[test]
+    fn build_bollard_config_empty_ulimits() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(hc.ulimits.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_init_process() {
+        let mut config = sample_config();
+        config.init = Some(true);
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert_eq!(hc.init, Some(true));
+    }
+
+    #[test]
+    fn build_bollard_config_shm_size() {
+        let mut config = sample_config();
+        config.shm_size = Some(268_435_456); // 256 MiB in bytes
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert_eq!(hc.shm_size, Some(268_435_456));
+    }
+
+    #[test]
+    fn build_bollard_config_tmpfs() {
+        let mut config = sample_config();
+        config
+            .tmpfs
+            .insert("/run".to_string(), "size=67108864,rw,noexec".to_string());
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        let tmpfs = hc.tmpfs.as_ref().expect("tmpfs");
+        assert_eq!(
+            tmpfs.get("/run").map(String::as_str),
+            Some("size=67108864,rw,noexec")
+        );
+    }
+
+    #[test]
+    fn build_bollard_config_empty_tmpfs() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(hc.tmpfs.is_none());
     }
 
     #[test]
