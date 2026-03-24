@@ -28,11 +28,12 @@ cargo install cargo-deny
 
 ## Architecture
 
-- `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, inspect, stats, history, version
-- `src/taskdef/` — ECS task definition JSON parser, types, and validation diagnostics
+- `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, inspect, stats, history, diff, watch, completions, version
+- `src/taskdef/` — ECS task definition JSON parser, types, validation diagnostics, and Terraform input converter
 - `src/container/` — OCI container runtime client (bollard, Docker/Podman)
 - `src/overrides/` — Local override configuration
 - `src/secrets/` — Secrets local resolver
+- `src/profile/` — Profile-based file resolution (.lecs.toml)
 - `src/orchestrator/` — Container lifecycle and dependsOn DAG
 - `src/metadata/` — ECS metadata endpoint mock (axum)
 - `src/credentials/` — Credential provider mock
@@ -41,13 +42,18 @@ cargo install cargo-deny
 
 ## Key Dependencies
 
-- `clap` — CLI framework
+- `clap`/`clap_complete` — CLI framework + shell completion generation
 - `bollard` — Container runtime API client (Docker/Podman)
 - `tokio` — Async runtime
 - `serde`/`serde_json` — JSON handling
 - `axum` — HTTP server for metadata/credentials
+- `aws-config` — AWS credential chain loading
+- `chrono` — Date/time handling
 - `tracing` — Structured logging
 - `anyhow`/`thiserror` — Error handling
+- `toml` — Configuration file parsing (.lecs.toml)
+- `notify` — File system watching (lecs watch)
+- `getrandom` — CSPRNG for auth token generation
 
 ## Completion Requirements
 

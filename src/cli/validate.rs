@@ -7,6 +7,7 @@ use crate::profile;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::TaskDefinition;
 use crate::taskdef::diagnostics::{self, Severity, ValidationDiagnostic, ValidationReport};
+use crate::taskdef::terraform;
 
 use super::ValidateArgs;
 
@@ -14,15 +15,42 @@ use super::ValidateArgs;
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 pub fn execute(args: &ValidateArgs) -> Result<()> {
+    let input_path = args
+        .task_definition
+        .as_deref()
+        .or(args.from_tf.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))?;
+
     // Resolve profile paths
     let resolved = profile::resolve_from_args(
-        &args.task_definition,
+        input_path,
         args.profile.as_deref(),
         args.r#override.as_deref(),
         args.secrets.as_deref(),
     )?;
 
-    let task_json = std::fs::read_to_string(&args.task_definition)?;
+    if let Some(tf_path) = &args.from_tf {
+        // Use from_terraform_file() to enforce file size limits and consistent error handling.
+        let task_def = terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())
+            .context("validation failed: could not parse Terraform JSON")?;
+        return execute_validated_task_def(
+            &task_def,
+            resolved
+                .override_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .as_deref(),
+            resolved
+                .secrets_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .as_deref(),
+        );
+    }
+
+    let task_json = std::fs::read_to_string(input_path)?;
     let override_json = resolved
         .override_path
         .as_ref()
@@ -39,6 +67,38 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
         override_json.as_deref(),
         secrets_json.as_deref(),
     )
+}
+
+/// Run extended validation on an already-parsed task definition.
+#[allow(clippy::print_stdout)]
+fn execute_validated_task_def(
+    task_def: &TaskDefinition,
+    override_json: Option<&str>,
+    secrets_json: Option<&str>,
+) -> Result<()> {
+    let mut report = diagnostics::validate_extended(task_def);
+
+    if let Some(json) = override_json {
+        let overrides = OverrideConfig::from_json(json)
+            .context("validation failed: could not parse override file")?;
+        let diags = diagnostics::validate_overrides(task_def, &overrides);
+        report.diagnostics.extend(diags);
+    }
+
+    if let Some(json) = secrets_json {
+        let resolver = SecretsResolver::from_json(json)
+            .context("validation failed: could not parse secrets file")?;
+        let diags = validate_secrets_coverage(task_def, &resolver);
+        report.diagnostics.extend(diags);
+    }
+
+    print_report(&report);
+
+    if report.has_errors() {
+        anyhow::bail!("validation failed with {} error(s)", report.error_count());
+    }
+
+    Ok(())
 }
 
 /// Core validation logic (testable without filesystem).

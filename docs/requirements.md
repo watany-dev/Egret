@@ -130,6 +130,18 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 | FR-12.3 | `--profile` で設定プロファイル（override + secrets）を切り替えできる | ✅ 実装済み |
 | FR-12.4 | `lecs completions` でシェル補完スクリプト（bash/zsh/fish）を生成できる | ✅ 実装済み |
 
+### FR-13: Terraform Plan/State 入力対応
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-13.1 | `--from-tf` で `terraform show -json` 出力をタスク定義として読み込める | ✅ 実装済み |
+| FR-13.2 | `--tf-resource` で複数 ECS リソースから1つを選択できる | ✅ 実装済み |
+| FR-13.3 | Plan 出力（`planned_values`）と State 出力（`values`）の両方に対応する | ✅ 実装済み |
+| FR-13.4 | 子モジュール内の ECS リソースを再帰的に探索できる | ✅ 実装済み |
+| FR-13.5 | `container_definitions` の JSON 文字列を二重デシリアライゼーションで変換する | ✅ 実装済み |
+| FR-13.6 | Terraform の volume ブロック（`host_path`）を Lecs の Volume 型に変換する | ✅ 実装済み |
+| FR-13.7 | `lecs run`, `lecs validate`, `lecs watch` で `--from-tf` を利用できる | ✅ 実装済み |
+
 ---
 
 ## 非機能要件
