@@ -405,7 +405,10 @@ impl ContainerRuntime for ContainerClient {
     async fn create_network(&self, family: &str) -> Result<String, ContainerError> {
         let name = format!("lecs-{family}");
 
-        let labels = HashMap::from([("lecs.managed", "true"), ("lecs.task", family)]);
+        let labels = HashMap::from([
+            (crate::labels::MANAGED, "true"),
+            (crate::labels::TASK, family),
+        ]);
 
         // Check if network already exists
         let existing = self
@@ -442,9 +445,9 @@ impl ContainerRuntime for ContainerClient {
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<NetworkInfo>, ContainerError> {
-        let mut label_filters = vec!["lecs.managed=true".to_string()];
+        let mut label_filters = vec![format!("{}=true", crate::labels::MANAGED)];
         if let Some(family) = task_filter {
-            label_filters.push(format!("lecs.task={family}"));
+            label_filters.push(format!("{}={family}", crate::labels::TASK));
         }
 
         let networks = self
@@ -516,9 +519,9 @@ impl ContainerRuntime for ContainerClient {
         &self,
         task_filter: Option<&str>,
     ) -> Result<Vec<ContainerInfo>, ContainerError> {
-        let mut label_filters = vec!["lecs.managed=true".to_string()];
+        let mut label_filters = vec![format!("{}=true", crate::labels::MANAGED)];
         if let Some(family) = task_filter {
-            label_filters.push(format!("lecs.task={family}"));
+            label_filters.push(format!("{}={family}", crate::labels::TASK));
         }
 
         let containers = self
@@ -560,7 +563,7 @@ impl ContainerRuntime for ContainerClient {
                         .map(|n| n.trim_start_matches('/').to_string())
                         .unwrap_or_default(),
                     image: c.image.unwrap_or_default(),
-                    family: labels.get("lecs.task").cloned().unwrap_or_default(),
+                    family: labels.get(crate::labels::TASK).cloned().unwrap_or_default(),
                     state: c.state.unwrap_or_default(),
                     health_status: None, // populated via inspect when needed
                     ports,
@@ -1035,7 +1038,7 @@ mod tests {
             }],
             network: "lecs-test".to_string(),
             network_aliases: vec!["app".to_string()],
-            labels: HashMap::from([("lecs.managed".into(), "true".into())]),
+            labels: HashMap::from([(crate::labels::MANAGED.into(), "true".into())]),
             ..Default::default()
         }
     }

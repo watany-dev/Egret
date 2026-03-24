@@ -16,13 +16,7 @@ use crate::profile::ResolvedPaths;
 ///
 /// Returns an error if none of `--task-definition`, `--from-tf`, or `--from-cfn` is provided.
 fn input_path(args: &WatchArgs) -> Result<&std::path::Path> {
-    args.task_definition
-        .as_deref()
-        .or(args.from_tf.as_deref())
-        .or(args.from_cfn.as_deref())
-        .ok_or_else(|| {
-            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
-        })
+    args.source.input_path()
 }
 
 /// Collect all paths that should be watched for changes.
@@ -35,10 +29,10 @@ pub fn collect_watch_paths(
     resolved: &ResolvedPaths,
 ) -> Vec<PathBuf> {
     let mut paths = vec![input.to_path_buf()];
-    if let Some(ref p) = args.r#override {
+    if let Some(ref p) = args.source.r#override {
         paths.push(p.clone());
     }
-    if let Some(ref p) = args.secrets {
+    if let Some(ref p) = args.source.secrets {
         paths.push(p.clone());
     }
     // Add profile-resolved paths that weren't already added via CLI flags
@@ -85,9 +79,9 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
 
     let resolved = profile::resolve_from_args(
         path,
-        args.profile.as_deref(),
-        args.r#override.as_deref(),
-        args.secrets.as_deref(),
+        args.source.profile.as_deref(),
+        args.source.r#override.as_deref(),
+        args.source.secrets.as_deref(),
     )?;
 
     let watch_paths = collect_watch_paths(path, args, &resolved);
@@ -160,7 +154,7 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
                 if let Some(server) = state.metadata_server.take() {
                     server.shutdown().await;
                 }
-                super::run::cleanup(
+                super::task_lifecycle::cleanup(
                     &*client,
                     &state.containers,
                     &state.network,
@@ -185,7 +179,7 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
     if let Some(server) = state.metadata_server.take() {
         server.shutdown().await;
     }
-    super::run::cleanup(
+    super::task_lifecycle::cleanup(
         &*client,
         &state.containers,
         &state.network,
@@ -212,54 +206,13 @@ async fn load_and_run_task(
     client: &crate::container::ContainerClient,
     event_sink: &dyn crate::events::EventSink,
 ) -> Result<WatchTaskState> {
-    use crate::overrides::OverrideConfig;
-    use crate::secrets::SecretsResolver;
-    use crate::taskdef::{Environment, TaskDefinition, cloudformation, terraform};
-
-    let path = input_path(args)?;
-
-    let resolved = crate::profile::resolve_from_args(
-        path,
-        args.profile.as_deref(),
-        args.r#override.as_deref(),
-        args.secrets.as_deref(),
-    )?;
-
-    let mut task_def = if let Some(tf_path) = &args.from_tf {
-        terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())?
-    } else if let Some(cfn_path) = &args.from_cfn {
-        cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())?
-    } else {
-        TaskDefinition::from_file(path)?
-    };
-
-    if let Some(override_path) = &resolved.override_path {
-        let override_config = OverrideConfig::from_file(override_path)?;
-        override_config.apply(&mut task_def);
-    }
-
-    let has_secrets = task_def
-        .container_definitions
-        .iter()
-        .any(|c| !c.secrets.is_empty());
-
-    if let Some(secrets_path) = &resolved.secrets_path {
-        let secrets_resolver = SecretsResolver::from_file(secrets_path)?;
-        for container in &mut task_def.container_definitions {
-            let secret_env_vars = secrets_resolver.resolve(&container.secrets)?;
-            for (name, value) in secret_env_vars {
-                container.environment.push(Environment { name, value });
-            }
-        }
-    } else if has_secrets {
-        tracing::warn!("Task definition has secrets but --secrets flag was not provided.");
-    }
+    let task_def = args.source.load_task_def()?;
 
     // Start metadata server if enabled (mirrors run::execute behavior)
     let (metadata_server, metadata_state) = if args.no_metadata {
         (None, None)
     } else {
-        match super::run::start_metadata_server(&task_def).await {
+        match super::task_lifecycle::start_metadata_server(&task_def).await {
             Ok((server, state)) => (Some(server), Some(state)),
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to start metadata server, continuing without it");
@@ -276,7 +229,7 @@ async fn load_and_run_task(
     };
 
     let family = task_def.family.clone();
-    let (network, containers) = super::run::run_task(
+    let (network, containers) = super::task_lifecycle::run_task(
         client,
         &task_def,
         metadata_port,
@@ -311,15 +264,18 @@ mod tests {
         secrets_path: Option<PathBuf>,
         extra_paths: Vec<PathBuf>,
     ) -> WatchArgs {
+        use crate::cli::TaskDefSourceArgs;
         WatchArgs {
-            task_definition: Some(task_def),
-            from_tf: None,
-            tf_resource: None,
-            from_cfn: None,
-            cfn_resource: None,
-            r#override: override_path,
-            secrets: secrets_path,
-            profile: None,
+            source: TaskDefSourceArgs {
+                task_definition: Some(task_def),
+                from_tf: None,
+                tf_resource: None,
+                from_cfn: None,
+                cfn_resource: None,
+                r#override: override_path,
+                secrets: secrets_path,
+                profile: None,
+            },
             no_metadata: false,
             events: false,
             debounce: 500,
@@ -338,7 +294,7 @@ mod tests {
     fn collect_watch_paths_basic() {
         let args = make_watch_args(PathBuf::from("task.json"), None, None, vec![]);
         let paths = collect_watch_paths(
-            args.task_definition.as_deref().unwrap(),
+            args.source.task_definition.as_deref().unwrap(),
             &args,
             &no_resolved(),
         );
@@ -354,7 +310,7 @@ mod tests {
             vec![],
         );
         let paths = collect_watch_paths(
-            args.task_definition.as_deref().unwrap(),
+            args.source.task_definition.as_deref().unwrap(),
             &args,
             &no_resolved(),
         );
@@ -373,7 +329,7 @@ mod tests {
             vec![PathBuf::from("/app/src"), PathBuf::from("/app/config")],
         );
         let paths = collect_watch_paths(
-            args.task_definition.as_deref().unwrap(),
+            args.source.task_definition.as_deref().unwrap(),
             &args,
             &no_resolved(),
         );
@@ -389,7 +345,11 @@ mod tests {
             override_path: Some(PathBuf::from("lecs-override.dev.json")),
             secrets_path: Some(PathBuf::from("secrets.dev.json")),
         };
-        let paths = collect_watch_paths(args.task_definition.as_deref().unwrap(), &args, &resolved);
+        let paths = collect_watch_paths(
+            args.source.task_definition.as_deref().unwrap(),
+            &args,
+            &resolved,
+        );
         assert_eq!(paths.len(), 3);
         assert_eq!(paths[0], PathBuf::from("task.json"));
         assert!(paths.contains(&PathBuf::from("lecs-override.dev.json")));
@@ -409,7 +369,11 @@ mod tests {
             override_path: Some(PathBuf::from("override.json")),
             secrets_path: None,
         };
-        let paths = collect_watch_paths(args.task_definition.as_deref().unwrap(), &args, &resolved);
+        let paths = collect_watch_paths(
+            args.source.task_definition.as_deref().unwrap(),
+            &args,
+            &resolved,
+        );
         assert_eq!(paths.len(), 2);
         assert_eq!(paths[0], PathBuf::from("task.json"));
         assert_eq!(paths[1], PathBuf::from("override.json"));
@@ -422,15 +386,18 @@ mod tests {
         secrets_path: Option<PathBuf>,
         extra_paths: Vec<PathBuf>,
     ) -> WatchArgs {
+        use crate::cli::TaskDefSourceArgs;
         WatchArgs {
-            task_definition: None,
-            from_tf: Some(tf_path),
-            tf_resource,
-            from_cfn: None,
-            cfn_resource: None,
-            r#override: override_path,
-            secrets: secrets_path,
-            profile: None,
+            source: TaskDefSourceArgs {
+                task_definition: None,
+                from_tf: Some(tf_path),
+                tf_resource,
+                from_cfn: None,
+                cfn_resource: None,
+                r#override: override_path,
+                secrets: secrets_path,
+                profile: None,
+            },
             no_metadata: false,
             events: false,
             debounce: 500,
@@ -441,7 +408,11 @@ mod tests {
     #[test]
     fn collect_watch_paths_from_tf() {
         let args = make_watch_args_from_tf(PathBuf::from("plan.json"), None, None, None, vec![]);
-        let paths = collect_watch_paths(args.from_tf.as_deref().unwrap(), &args, &no_resolved());
+        let paths = collect_watch_paths(
+            args.source.from_tf.as_deref().unwrap(),
+            &args,
+            &no_resolved(),
+        );
         assert_eq!(paths, vec![PathBuf::from("plan.json")]);
     }
 
@@ -454,7 +425,11 @@ mod tests {
             Some(PathBuf::from("secrets.json")),
             vec![PathBuf::from("/app/src")],
         );
-        let paths = collect_watch_paths(args.from_tf.as_deref().unwrap(), &args, &no_resolved());
+        let paths = collect_watch_paths(
+            args.source.from_tf.as_deref().unwrap(),
+            &args,
+            &no_resolved(),
+        );
         assert_eq!(paths.len(), 4);
         assert_eq!(paths[0], PathBuf::from("plan.json"));
         assert_eq!(paths[1], PathBuf::from("override.json"));
@@ -475,7 +450,7 @@ mod tests {
             override_path: Some(PathBuf::from("override.json")),
             secrets_path: None,
         };
-        let paths = collect_watch_paths(args.from_tf.as_deref().unwrap(), &args, &resolved);
+        let paths = collect_watch_paths(args.source.from_tf.as_deref().unwrap(), &args, &resolved);
         assert_eq!(paths.len(), 2);
         assert_eq!(paths[0], PathBuf::from("plan.json"));
         assert_eq!(paths[1], PathBuf::from("override.json"));
@@ -497,15 +472,18 @@ mod tests {
 
     #[test]
     fn input_path_from_cfn() {
+        use crate::cli::TaskDefSourceArgs;
         let args = WatchArgs {
-            task_definition: None,
-            from_tf: None,
-            tf_resource: None,
-            from_cfn: Some(PathBuf::from("template.json")),
-            cfn_resource: None,
-            r#override: None,
-            secrets: None,
-            profile: None,
+            source: TaskDefSourceArgs {
+                task_definition: None,
+                from_tf: None,
+                tf_resource: None,
+                from_cfn: Some(PathBuf::from("template.json")),
+                cfn_resource: None,
+                r#override: None,
+                secrets: None,
+                profile: None,
+            },
             no_metadata: false,
             events: false,
             debounce: 500,
@@ -517,15 +495,18 @@ mod tests {
 
     #[test]
     fn input_path_none_errors() {
+        use crate::cli::TaskDefSourceArgs;
         let args = WatchArgs {
-            task_definition: None,
-            from_tf: None,
-            tf_resource: None,
-            from_cfn: None,
-            cfn_resource: None,
-            r#override: None,
-            secrets: None,
-            profile: None,
+            source: TaskDefSourceArgs {
+                task_definition: None,
+                from_tf: None,
+                tf_resource: None,
+                from_cfn: None,
+                cfn_resource: None,
+                r#override: None,
+                secrets: None,
+                profile: None,
+            },
             no_metadata: false,
             events: false,
             debounce: 500,

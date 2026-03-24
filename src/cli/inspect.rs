@@ -67,8 +67,12 @@ pub async fn execute_with_client(
 
         // Display environment variables with secret masking
         if !inspection.env.is_empty() {
-            let secret_names =
-                parse_secret_names(inspection.labels.get("lecs.secrets").map(String::as_str));
+            let secret_names = parse_secret_names(
+                inspection
+                    .labels
+                    .get(crate::labels::SECRETS)
+                    .map(String::as_str),
+            );
             let _ = writeln!(output, "  Environment:");
             for env_var in &inspection.env {
                 let masked = mask_env_var(env_var, &secret_names);
@@ -264,7 +268,7 @@ mod tests {
         let mut inspection = make_inspection("web-id");
         inspection
             .labels
-            .insert("lecs.secrets".into(), "DB_PASSWORD".into());
+            .insert(crate::labels::SECRETS.into(), "DB_PASSWORD".into());
 
         let mock = MockContainerClient {
             list_containers_results: Mutex::new(VecDeque::from([Ok(vec![make_container_info(

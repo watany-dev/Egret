@@ -8,6 +8,7 @@ mod cli;
 mod container;
 mod credentials;
 mod events;
+mod labels;
 mod metadata;
 mod orchestrator;
 mod overrides;

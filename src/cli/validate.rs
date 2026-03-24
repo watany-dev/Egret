@@ -7,7 +7,6 @@ use crate::profile;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::TaskDefinition;
 use crate::taskdef::diagnostics::{self, Severity, ValidationDiagnostic, ValidationReport};
-use crate::taskdef::{cloudformation, terraform};
 
 use super::ValidateArgs;
 
@@ -15,65 +14,16 @@ use super::ValidateArgs;
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::print_stdout)]
 pub fn execute(args: &ValidateArgs) -> Result<()> {
-    let input_path = args
-        .task_definition
-        .as_deref()
-        .or(args.from_tf.as_deref())
-        .or(args.from_cfn.as_deref())
-        .ok_or_else(|| {
-            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
-        })?;
+    let input_path = args.source.input_path()?;
 
-    // Resolve profile paths
+    // Resolve profile paths (needed for override/secrets file paths)
     let resolved = profile::resolve_from_args(
         input_path,
-        args.profile.as_deref(),
-        args.r#override.as_deref(),
-        args.secrets.as_deref(),
+        args.source.profile.as_deref(),
+        args.source.r#override.as_deref(),
+        args.source.secrets.as_deref(),
     )?;
 
-    if let Some(tf_path) = &args.from_tf {
-        // Use from_terraform_file() to enforce file size limits and consistent error handling.
-        let task_def = terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())
-            .context("validation failed: could not parse Terraform JSON")?;
-        return execute_validated_task_def(
-            &task_def,
-            resolved
-                .override_path
-                .as_ref()
-                .map(std::fs::read_to_string)
-                .transpose()?
-                .as_deref(),
-            resolved
-                .secrets_path
-                .as_ref()
-                .map(std::fs::read_to_string)
-                .transpose()?
-                .as_deref(),
-        );
-    }
-
-    if let Some(cfn_path) = &args.from_cfn {
-        let task_def = cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())
-            .context("validation failed: could not parse CloudFormation template")?;
-        return execute_validated_task_def(
-            &task_def,
-            resolved
-                .override_path
-                .as_ref()
-                .map(std::fs::read_to_string)
-                .transpose()?
-                .as_deref(),
-            resolved
-                .secrets_path
-                .as_ref()
-                .map(std::fs::read_to_string)
-                .transpose()?
-                .as_deref(),
-        );
-    }
-
-    let task_json = std::fs::read_to_string(input_path)?;
     let override_json = resolved
         .override_path
         .as_ref()
@@ -85,6 +35,23 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
         .map(std::fs::read_to_string)
         .transpose()?;
 
+    // For Terraform/CloudFormation sources, parse and validate the converted definition.
+    // For plain JSON, validate from the raw JSON (provides better error context).
+    if args.source.from_tf.is_some() || args.source.from_cfn.is_some() {
+        let parse_context = if args.source.from_tf.is_some() {
+            "validation failed: could not parse Terraform task definition source"
+        } else {
+            "validation failed: could not parse CloudFormation task definition source"
+        };
+        let task_def = args.source.parse_task_def().context(parse_context)?;
+        return execute_validated_task_def(
+            &task_def,
+            override_json.as_deref(),
+            secrets_json.as_deref(),
+        );
+    }
+
+    let task_json = std::fs::read_to_string(input_path)?;
     execute_from_json(
         &task_json,
         override_json.as_deref(),
