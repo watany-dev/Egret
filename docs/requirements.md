@@ -142,34 +142,45 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 | FR-13.6 | Terraform の volume ブロック（`host_path`）を Lecs の Volume 型に変換する | ✅ 実装済み |
 | FR-13.7 | `lecs run`, `lecs validate`, `lecs watch` で `--from-tf` を利用できる | ✅ 実装済み |
 
-### FR-14: タスク定義フィールド完全対応
+### FR-14: CloudFormation / CDK テンプレート入力対応
 
 | ID | 要件 | 状態 |
 |----|------|------|
-| FR-14.1 | パース済みの `cpu` / `memory` / `memoryReservation` をコンテナリソース制限として適用する | 未実装 |
-| FR-14.2 | `workingDirectory` フィールドをコンテナの作業ディレクトリに設定する | 未実装 |
-| FR-14.3 | `user` フィールドをコンテナの実行ユーザーに設定する | 未実装 |
-| FR-14.4 | `stopTimeout` フィールドをグレースフルシャットダウンのタイムアウトに反映する（現在ハードコード 10 秒） | 未実装 |
-| FR-14.5 | `dockerLabels` をユーザー定義ラベルとして lecs 管理ラベルとマージする（lecs ラベル優先） | 未実装 |
-| FR-14.6 | `extraHosts` をユーザー定義の host-to-IP マッピングとして `host.docker.internal` と結合する | 未実装 |
+| FR-14.1 | `--from-cfn` で CloudFormation テンプレート JSON をタスク定義として読み込める | ✅ 実装済み |
+| FR-14.2 | `--cfn-resource` で複数 ECS リソースから1つを論理IDで選択できる | ✅ 実装済み |
+| FR-14.3 | PascalCase のプロパティキーを camelCase に変換して既存型に対応する | ✅ 実装済み |
+| FR-14.4 | Intrinsic Function（`Ref`, `Fn::Sub` 等）を検出してエラーを報告する | ✅ 実装済み |
+| FR-14.5 | `lecs run`, `lecs validate`, `lecs watch` で `--from-cfn` を利用できる | ✅ 実装済み |
+| FR-14.6 | CDK synth 出力（`cdk.out/*.template.json`）を `--from-cfn` で読み込める | ✅ 実装済み |
 
-### FR-15: ECS Exec + 環境変数拡張
-
-| ID | 要件 | 状態 |
-|----|------|------|
-| FR-15.1 | `lecs exec <container> [-- command]` でコンテナ内コマンドを実行できる（デフォルト `/bin/sh`） | 未実装 |
-| FR-15.2 | `environmentFiles` フィールドでローカル .env ファイルから環境変数を読み込める | 未実装 |
-| FR-15.3 | `ulimits` フィールドをコンテナのリソースリミットに反映する | 未実装 |
-| FR-15.4 | `linuxParameters` の主要フィールド（`initProcessEnabled`, `tmpfs`, `sharedMemorySize`）に対応する | 未実装 |
-
-### FR-16: サービスモード MVP
+### FR-15: タスク定義フィールド完全対応
 
 | ID | 要件 | 状態 |
 |----|------|------|
-| FR-16.1 | リスタートポリシー（`None` / `OnFailure` / `Always`）に基づきコンテナを自動再起動する | 未実装 |
-| FR-16.2 | 指数バックオフ（1s → 2s → ... → 最大 300s）でリスタート間隔を制御する | 未実装 |
-| FR-16.3 | `lecs run --service` フラグでサービスモード（Ctrl+C まで常時稼働）を有効化できる | 未実装 |
-| FR-16.4 | バックグラウンドでクレデンシャルを定期リフレッシュし、長時間稼働時の期限切れを防止する | 未実装 |
+| FR-15.1 | パース済みの `cpu` / `memory` / `memoryReservation` をコンテナリソース制限として適用する | 未実装 |
+| FR-15.2 | `workingDirectory` フィールドをコンテナの作業ディレクトリに設定する | 未実装 |
+| FR-15.3 | `user` フィールドをコンテナの実行ユーザーに設定する | 未実装 |
+| FR-15.4 | `stopTimeout` フィールドをグレースフルシャットダウンのタイムアウトに反映する（現在ハードコード 10 秒） | 未実装 |
+| FR-15.5 | `dockerLabels` をユーザー定義ラベルとして lecs 管理ラベルとマージする（lecs ラベル優先） | 未実装 |
+| FR-15.6 | `extraHosts` をユーザー定義の host-to-IP マッピングとして `host.docker.internal` と結合する | 未実装 |
+
+### FR-16: ECS Exec + 環境変数拡張
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-16.1 | `lecs exec <container> [-- command]` でコンテナ内コマンドを実行できる（デフォルト `/bin/sh`） | 未実装 |
+| FR-16.2 | `environmentFiles` フィールドでローカル .env ファイルから環境変数を読み込める | 未実装 |
+| FR-16.3 | `ulimits` フィールドをコンテナのリソースリミットに反映する | 未実装 |
+| FR-16.4 | `linuxParameters` の主要フィールド（`initProcessEnabled`, `tmpfs`, `sharedMemorySize`）に対応する | 未実装 |
+
+### FR-17: サービスモード MVP
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-17.1 | リスタートポリシー（`None` / `OnFailure` / `Always`）に基づきコンテナを自動再起動する | 未実装 |
+| FR-17.2 | 指数バックオフ（1s → 2s → ... → 最大 300s）でリスタート間隔を制御する | 未実装 |
+| FR-17.3 | `lecs run --service` フラグでサービスモード（Ctrl+C まで常時稼働）を有効化できる | 未実装 |
+| FR-17.4 | バックグラウンドでクレデンシャルを定期リフレッシュし、長時間稼働時の期限切れを防止する | 未実装 |
 
 ---
 

@@ -285,6 +285,41 @@ Phase 0-2.5: ✅ 完了
     │                       └── Phase 12 (サービスモード MVP)
 ```
 
+### Phase 10: CloudFormation / CDK 互換性
+**目標**: CloudFormation テンプレート（CDK synth 出力含む）から直接タスク定義を読み込めるようにする
+
+- [x] `--from-cfn` フラグ — CloudFormation テンプレート JSON を直接入力
+  - PascalCase → camelCase キー変換による既存型との互換性確保
+  - Intrinsic Function（`Ref`, `Fn::Sub` 等）の検出・エラー報告
+- [x] `--cfn-resource` フラグ — 複数 ECS リソースから1つを論理IDで選択
+- [x] 対応コマンド: `lecs run`, `lecs validate`, `lecs watch`
+- [ ] YAML テンプレート対応（将来対応）
+- [ ] `--from-cdk` による `cdk.out/` ディレクトリ自動探索（将来対応）
+
+---
+
+## 実装順序とPhase間の依存関係
+
+```
+Phase 0-2.5: ✅ 完了
+    │
+    ├── Phase 3 (Metadata + Credentials) ✅
+    │       │
+    ├── Phase 4 (dependsOn + Health Check) ✅
+    │       │
+    ├── Phase 5 (Volumes + Logs + ps) ✅
+    │       │
+    ├── Phase 6 (Validate/Init/Dry-run) ✅
+    │       │
+    │       ├── Phase 7 (可観測性) ✅
+    │       │
+    │       └── Phase 8 (ワークフロー高速化) ✅
+    │               │
+    │               ├── Phase 9 (Terraform 互換性) ✅
+    │               │
+    │               └── Phase 10 (CloudFormation / CDK 互換性)
+```
+
 ---
 
 ## 対象外（明示的に除外）

@@ -10,16 +10,19 @@ use anyhow::{Result, bail};
 use super::WatchArgs;
 use crate::profile::ResolvedPaths;
 
-/// Return the input file path (either task definition or Terraform file).
+/// Return the input file path (task definition, Terraform, or `CloudFormation` file).
 ///
 /// # Errors
 ///
-/// Returns an error if neither `--task-definition` nor `--from-tf` is provided.
+/// Returns an error if none of `--task-definition`, `--from-tf`, or `--from-cfn` is provided.
 fn input_path(args: &WatchArgs) -> Result<&std::path::Path> {
     args.task_definition
         .as_deref()
         .or(args.from_tf.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))
+        .or(args.from_cfn.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
+        })
 }
 
 /// Collect all paths that should be watched for changes.
@@ -211,7 +214,7 @@ async fn load_and_run_task(
 ) -> Result<WatchTaskState> {
     use crate::overrides::OverrideConfig;
     use crate::secrets::SecretsResolver;
-    use crate::taskdef::{Environment, TaskDefinition, terraform};
+    use crate::taskdef::{Environment, TaskDefinition, cloudformation, terraform};
 
     let path = input_path(args)?;
 
@@ -224,6 +227,8 @@ async fn load_and_run_task(
 
     let mut task_def = if let Some(tf_path) = &args.from_tf {
         terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())?
+    } else if let Some(cfn_path) = &args.from_cfn {
+        cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())?
     } else {
         TaskDefinition::from_file(path)?
     };
@@ -310,6 +315,8 @@ mod tests {
             task_definition: Some(task_def),
             from_tf: None,
             tf_resource: None,
+            from_cfn: None,
+            cfn_resource: None,
             r#override: override_path,
             secrets: secrets_path,
             profile: None,
@@ -419,6 +426,8 @@ mod tests {
             task_definition: None,
             from_tf: Some(tf_path),
             tf_resource,
+            from_cfn: None,
+            cfn_resource: None,
             r#override: override_path,
             secrets: secrets_path,
             profile: None,
@@ -470,6 +479,60 @@ mod tests {
         assert_eq!(paths.len(), 2);
         assert_eq!(paths[0], PathBuf::from("plan.json"));
         assert_eq!(paths[1], PathBuf::from("override.json"));
+    }
+
+    #[test]
+    fn input_path_from_task_definition() {
+        let args = make_watch_args(PathBuf::from("task.json"), None, None, vec![]);
+        let path = input_path(&args).unwrap();
+        assert_eq!(path, std::path::Path::new("task.json"));
+    }
+
+    #[test]
+    fn input_path_from_tf() {
+        let args = make_watch_args_from_tf(PathBuf::from("plan.json"), None, None, None, vec![]);
+        let path = input_path(&args).unwrap();
+        assert_eq!(path, std::path::Path::new("plan.json"));
+    }
+
+    #[test]
+    fn input_path_from_cfn() {
+        let args = WatchArgs {
+            task_definition: None,
+            from_tf: None,
+            tf_resource: None,
+            from_cfn: Some(PathBuf::from("template.json")),
+            cfn_resource: None,
+            r#override: None,
+            secrets: None,
+            profile: None,
+            no_metadata: false,
+            events: false,
+            debounce: 500,
+            watch_paths: vec![],
+        };
+        let path = input_path(&args).unwrap();
+        assert_eq!(path, std::path::Path::new("template.json"));
+    }
+
+    #[test]
+    fn input_path_none_errors() {
+        let args = WatchArgs {
+            task_definition: None,
+            from_tf: None,
+            tf_resource: None,
+            from_cfn: None,
+            cfn_resource: None,
+            r#override: None,
+            secrets: None,
+            profile: None,
+            no_metadata: false,
+            events: false,
+            debounce: 500,
+            watch_paths: vec![],
+        };
+        let result = input_path(&args);
+        assert!(result.is_err());
     }
 
     #[test]

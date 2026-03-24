@@ -1,5 +1,6 @@
 //! ECS task definition parsing and types.
 
+pub mod cloudformation;
 pub mod diagnostics;
 pub mod terraform;
 
@@ -40,6 +41,23 @@ pub enum TaskDefError {
 
     #[error("failed to parse Terraform JSON: {0}")]
     ParseTerraformJson(String),
+
+    #[error("no AWS::ECS::TaskDefinition resource found in CloudFormation template")]
+    CfnNoEcsResource,
+
+    #[error(
+        "multiple AWS::ECS::TaskDefinition resources found: {resources:?}. Use --cfn-resource to specify one"
+    )]
+    CfnMultipleResources { resources: Vec<String> },
+
+    #[error("CloudFormation resource '{0}' not found")]
+    CfnResourceNotFound(String),
+
+    #[error("failed to parse CloudFormation template: {0}")]
+    ParseCfnJson(String),
+
+    #[error("CloudFormation intrinsic function found in {field}: {detail}")]
+    CfnIntrinsicFunction { field: String, detail: String },
 }
 
 /// ECS task definition top-level structure.
