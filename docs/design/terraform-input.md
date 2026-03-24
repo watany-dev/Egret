@@ -166,7 +166,6 @@ EFS/Docker volume 設定は未サポート（`host_path` のない volume は `h
 | `lecs run` | ✅ | ✅ |
 | `lecs validate` | ✅ | ✅ |
 | `lecs watch` | ✅ | ✅ |
-| `lecs diff` | — | — |
 
 ### フラグ設計
 
