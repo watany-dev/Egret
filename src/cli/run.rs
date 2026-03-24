@@ -558,18 +558,7 @@ mod tests {
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "nginx:latest".to_string(),
-                essential: true,
-                command: vec![],
-                entry_point: vec![],
-                environment: vec![],
-                port_mappings: vec![],
-                secrets: vec![],
-                cpu: None,
-                memory: None,
-                memory_reservation: None,
-                depends_on: vec![],
-                health_check: None,
-                mount_points: vec![],
+                ..Default::default()
             }],
         }
     }
@@ -584,34 +573,13 @@ mod tests {
                 ContainerDefinition {
                     name: "app".to_string(),
                     image: "nginx:latest".to_string(),
-                    essential: true,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
-                    port_mappings: vec![],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
                 ContainerDefinition {
                     name: "sidecar".to_string(),
                     image: "redis:latest".to_string(),
                     essential: false,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
-                    port_mappings: vec![],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
             ],
         }
@@ -764,7 +732,6 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "nginx:latest".to_string(),
-            essential: true,
             command: vec!["nginx".into(), "-g".into(), "daemon off;".into()],
             entry_point: vec!["/docker-entrypoint.sh".into()],
             environment: vec![Environment {
@@ -776,13 +743,9 @@ mod tests {
                 host_port: Some(8080),
                 protocol: "tcp".to_string(),
             }],
-            secrets: vec![],
             cpu: Some(256),
             memory: Some(512),
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("my-app", &def, "lecs-my-app", None, &[], None);
@@ -808,22 +771,12 @@ mod tests {
         let def = ContainerDefinition {
             name: "web".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
             port_mappings: vec![PortMapping {
                 container_port: 3000,
                 host_port: None,
                 protocol: "tcp".to_string(),
             }],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
@@ -838,18 +791,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
@@ -864,18 +806,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "minimal".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
@@ -891,18 +822,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", Some(12345), &[], None);
@@ -923,18 +843,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config(
@@ -958,18 +867,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", Some(12345), &[], None);
@@ -987,18 +885,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
@@ -1047,16 +934,6 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
             health_check: Some(HealthCheck {
                 command: vec!["CMD-SHELL".into(), "curl -f http://localhost/".into()],
                 interval: 10,
@@ -1064,7 +941,7 @@ mod tests {
                 retries: 3,
                 start_period: 15,
             }),
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &[], None);
@@ -1100,37 +977,16 @@ mod tests {
                 ContainerDefinition {
                     name: "db".to_string(),
                     image: "postgres:16".to_string(),
-                    essential: true,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
-                    port_mappings: vec![],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
                 ContainerDefinition {
                     name: "app".to_string(),
                     image: "my-app:latest".to_string(),
-                    essential: true,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
-                    port_mappings: vec![],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
                     depends_on: vec![DependsOn {
                         container_name: "db".to_string(),
                         condition: DependencyCondition::Start,
                     }],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
             ],
         };
@@ -1224,22 +1080,12 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
             mount_points: vec![MountPoint {
                 source_volume: "data".to_string(),
                 container_path: "/app/data".to_string(),
                 read_only: false,
             }],
+            ..Default::default()
         };
 
         let config = build_container_config("test", &def, "lecs-test", None, &volumes, None);
@@ -1272,18 +1118,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "nginx:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
         let output = format_container_dry_run("test", &def, &HashSet::new());
         assert!(output.contains("Container: test-app"));
@@ -1295,22 +1130,12 @@ mod tests {
         let def = ContainerDefinition {
             name: "web".to_string(),
             image: "nginx:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
             port_mappings: vec![PortMapping {
                 container_port: 80,
                 host_port: Some(8080),
                 protocol: "tcp".to_string(),
             }],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
         let output = format_container_dry_run("test", &def, &HashSet::new());
         assert!(output.contains("8080:80/tcp"));
@@ -1321,9 +1146,6 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
             environment: vec![
                 Environment {
                     name: "PUBLIC_VAR".to_string(),
@@ -1334,14 +1156,7 @@ mod tests {
                     value: "super-secret".to_string(),
                 },
             ],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
         let secret_names: HashSet<String> = std::iter::once("DB_PASSWORD".to_string()).collect();
         let output = format_container_dry_run("test", &def, &secret_names);
@@ -1356,21 +1171,11 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
             depends_on: vec![crate::taskdef::DependsOn {
                 container_name: "db".to_string(),
                 condition: DependencyCondition::Healthy,
             }],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
         let output = format_container_dry_run("test", &def, &HashSet::new());
         assert!(output.contains("Depends on:"));
@@ -1383,16 +1188,6 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
             health_check: Some(HealthCheck {
                 command: vec!["CMD-SHELL".into(), "curl -f http://localhost/".into()],
                 interval: 10,
@@ -1400,7 +1195,7 @@ mod tests {
                 retries: 3,
                 start_period: 0,
             }),
-            mount_points: vec![],
+            ..Default::default()
         };
         let output = format_container_dry_run("test", &def, &HashSet::new());
         assert!(output.contains("Health check: CMD-SHELL curl -f http://localhost/"));
@@ -1417,42 +1212,22 @@ mod tests {
                 ContainerDefinition {
                     name: "web".to_string(),
                     image: "nginx:latest".to_string(),
-                    essential: true,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
                     port_mappings: vec![PortMapping {
                         container_port: 80,
                         host_port: Some(8080),
                         protocol: "tcp".to_string(),
                     }],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
                 ContainerDefinition {
                     name: "api".to_string(),
                     image: "node:20".to_string(),
-                    essential: true,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
                     port_mappings: vec![PortMapping {
                         container_port: 3000,
                         host_port: Some(3000),
                         protocol: "tcp".to_string(),
                     }],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
             ],
         };

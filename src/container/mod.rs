@@ -89,6 +89,25 @@ pub struct ContainerConfig {
     pub binds: Vec<String>,
 }
 
+impl Default for ContainerConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            image: String::new(),
+            command: Vec::new(),
+            entry_point: Vec::new(),
+            env: Vec::new(),
+            port_mappings: Vec::new(),
+            network: String::new(),
+            network_aliases: Vec::new(),
+            labels: HashMap::new(),
+            extra_hosts: Vec::new(),
+            health_check: None,
+            binds: Vec::new(),
+        }
+    }
+}
+
 /// Docker HEALTHCHECK configuration (nanosecond units).
 pub struct HealthCheckConfig {
     /// Health check command (e.g. `["CMD-SHELL", "curl -f http://localhost/"]`).
@@ -883,9 +902,7 @@ mod tests {
             network: "lecs-test".to_string(),
             network_aliases: vec!["app".to_string()],
             labels: HashMap::from([("lecs.managed".into(), "true".into())]),
-            extra_hosts: vec![],
-            health_check: None,
-            binds: vec![],
+            ..Default::default()
         }
     }
 
@@ -936,16 +953,8 @@ mod tests {
         let config = ContainerConfig {
             name: "min".to_string(),
             image: "alpine".to_string(),
-            command: vec![],
-            entry_point: vec![],
-            env: vec![],
-            port_mappings: vec![],
             network: "net".to_string(),
-            network_aliases: vec![],
-            labels: HashMap::new(),
-            extra_hosts: vec![],
-            health_check: None,
-            binds: vec![],
+            ..Default::default()
         };
         let result = build_bollard_config(&config);
 

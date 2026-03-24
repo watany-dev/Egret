@@ -144,6 +144,27 @@ pub struct ContainerDefinition {
     pub mount_points: Vec<MountPoint>,
 }
 
+impl Default for ContainerDefinition {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            image: String::new(),
+            essential: true,
+            command: Vec::new(),
+            entry_point: Vec::new(),
+            environment: Vec::new(),
+            port_mappings: Vec::new(),
+            secrets: Vec::new(),
+            cpu: None,
+            memory: None,
+            memory_reservation: None,
+            depends_on: Vec::new(),
+            health_check: None,
+            mount_points: Vec::new(),
+        }
+    }
+}
+
 const fn default_essential() -> bool {
     true
 }

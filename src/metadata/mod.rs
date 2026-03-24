@@ -391,34 +391,15 @@ mod tests {
                 ContainerDefinition {
                     name: "web".to_string(),
                     image: "nginx:latest".to_string(),
-                    essential: true,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
-                    port_mappings: vec![],
-                    secrets: vec![],
                     cpu: Some(256),
                     memory: Some(512),
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
                 ContainerDefinition {
                     name: "sidecar".to_string(),
                     image: "redis:latest".to_string(),
                     essential: false,
-                    command: vec![],
-                    entry_point: vec![],
-                    environment: vec![],
-                    port_mappings: vec![],
-                    secrets: vec![],
-                    cpu: None,
-                    memory: None,
-                    memory_reservation: None,
-                    depends_on: vec![],
-                    health_check: None,
-                    mount_points: vec![],
+                    ..Default::default()
                 },
             ],
         }
@@ -453,18 +434,9 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "nginx:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
             cpu: Some(256),
             memory: Some(512),
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let meta = build_container_metadata("my-app", &def);
@@ -513,18 +485,9 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "nginx:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
             cpu: Some(256),
             memory: Some(512),
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let meta = build_container_metadata("test", &def);
@@ -538,18 +501,7 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "nginx:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
-            cpu: None,
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let meta = build_container_metadata("test", &def);
@@ -570,18 +522,7 @@ mod tests {
             container_definitions: vec![ContainerDefinition {
                 name: "app".to_string(),
                 image: "alpine:latest".to_string(),
-                essential: true,
-                command: vec![],
-                entry_point: vec![],
-                environment: vec![],
-                port_mappings: vec![],
-                secrets: vec![],
-                cpu: None,
-                memory: None,
-                memory_reservation: None,
-                depends_on: vec![],
-                health_check: None,
-                mount_points: vec![],
+                ..Default::default()
             }],
         };
 
@@ -598,18 +539,8 @@ mod tests {
         let def = ContainerDefinition {
             name: "app".to_string(),
             image: "alpine:latest".to_string(),
-            essential: true,
-            command: vec![],
-            entry_point: vec![],
-            environment: vec![],
-            port_mappings: vec![],
-            secrets: vec![],
             cpu: Some(256),
-            memory: None,
-            memory_reservation: None,
-            depends_on: vec![],
-            health_check: None,
-            mount_points: vec![],
+            ..Default::default()
         };
 
         let meta = build_container_metadata("test", &def);
