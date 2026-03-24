@@ -201,10 +201,8 @@ impl TaskDefSourceArgs {
             .unwrap_or_else(|| std::path::Path::new("."));
         for container in &mut task_def.container_definitions {
             if !container.environment_files.is_empty() {
-                let env_vars = crate::taskdef::load_environment_files(
-                    &container.environment_files,
-                    base_dir,
-                )?;
+                let env_vars =
+                    crate::taskdef::load_environment_files(&container.environment_files, base_dir)?;
                 // environmentFiles are loaded first; explicit environment entries override them.
                 // We prepend env file vars so that container.environment (appended later) wins.
                 let existing: Vec<Environment> = std::mem::take(&mut container.environment);
@@ -1070,5 +1068,223 @@ mod tests {
             }
             _ => panic!("expected Watch command"),
         }
+    }
+
+    // --- TaskDefSourceArgs method tests ---
+
+    fn make_source_args(task_def: Option<PathBuf>) -> TaskDefSourceArgs {
+        TaskDefSourceArgs {
+            task_definition: task_def,
+            from_tf: None,
+            tf_resource: None,
+            from_cfn: None,
+            cfn_resource: None,
+            r#override: None,
+            secrets: None,
+            profile: None,
+        }
+    }
+
+    #[test]
+    fn source_args_input_path_task_definition() {
+        let args = make_source_args(Some(PathBuf::from("task.json")));
+        assert_eq!(
+            args.input_path().unwrap(),
+            std::path::Path::new("task.json")
+        );
+    }
+
+    #[test]
+    fn source_args_input_path_from_tf() {
+        let mut args = make_source_args(None);
+        args.from_tf = Some(PathBuf::from("plan.json"));
+        assert_eq!(
+            args.input_path().unwrap(),
+            std::path::Path::new("plan.json")
+        );
+    }
+
+    #[test]
+    fn source_args_input_path_from_cfn() {
+        let mut args = make_source_args(None);
+        args.from_cfn = Some(PathBuf::from("template.json"));
+        assert_eq!(
+            args.input_path().unwrap(),
+            std::path::Path::new("template.json")
+        );
+    }
+
+    #[test]
+    fn source_args_input_path_none_errors() {
+        let args = make_source_args(None);
+        assert!(args.input_path().is_err());
+    }
+
+    #[test]
+    fn source_args_parse_task_def_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task.json");
+        std::fs::write(
+            &path,
+            r#"{"family":"test","containerDefinitions":[{"name":"app","image":"nginx:latest"}]}"#,
+        )
+        .unwrap();
+
+        let args = make_source_args(Some(path));
+        let td = args.parse_task_def().unwrap();
+        assert_eq!(td.family, "test");
+        assert_eq!(td.container_definitions[0].name, "app");
+    }
+
+    #[test]
+    fn source_args_parse_task_def_from_tf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "values": {
+                    "root_module": {
+                        "resources": [{
+                            "address": "aws_ecs_task_definition.web",
+                            "type": "aws_ecs_task_definition",
+                            "values": {
+                                "family": "tf-test",
+                                "container_definitions": "[{\"name\":\"web\",\"image\":\"nginx:latest\"}]"
+                            }
+                        }]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mut args = make_source_args(None);
+        args.from_tf = Some(path);
+        let td = args.parse_task_def().unwrap();
+        assert_eq!(td.family, "tf-test");
+    }
+
+    #[test]
+    fn source_args_parse_task_def_from_cfn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("template.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "Resources": {
+                    "TaskDef": {
+                        "Type": "AWS::ECS::TaskDefinition",
+                        "Properties": {
+                            "Family": "cfn-test",
+                            "ContainerDefinitions": [{"Name":"api","Image":"node:20"}]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mut args = make_source_args(None);
+        args.from_cfn = Some(path);
+        let td = args.parse_task_def().unwrap();
+        assert_eq!(td.family, "cfn-test");
+    }
+
+    #[test]
+    fn source_args_load_task_def_minimal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task.json");
+        std::fs::write(
+            &path,
+            r#"{"family":"load-test","containerDefinitions":[{"name":"app","image":"nginx:latest"}]}"#,
+        )
+        .unwrap();
+
+        let args = make_source_args(Some(path));
+        let td = args.load_task_def().unwrap();
+        assert_eq!(td.family, "load-test");
+    }
+
+    #[test]
+    fn source_args_load_task_def_with_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_path = dir.path().join("task.json");
+        std::fs::write(
+            &task_path,
+            r#"{"family":"test","containerDefinitions":[{"name":"app","image":"nginx:latest"}]}"#,
+        )
+        .unwrap();
+
+        let override_path = dir.path().join("override.json");
+        std::fs::write(
+            &override_path,
+            r#"{"containerOverrides":{"app":{"image":"nginx:alpine"}}}"#,
+        )
+        .unwrap();
+
+        let mut args = make_source_args(Some(task_path));
+        args.r#override = Some(override_path);
+        let td = args.load_task_def().unwrap();
+        assert_eq!(td.container_definitions[0].image, "nginx:alpine");
+    }
+
+    #[test]
+    fn source_args_load_task_def_with_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_path = dir.path().join("task.json");
+        std::fs::write(
+            &task_path,
+            r#"{
+                "family": "test",
+                "containerDefinitions": [{
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "secrets": [{"name": "DB_PASS", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:my-secret"}]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let secrets_path = dir.path().join("secrets.json");
+        std::fs::write(
+            &secrets_path,
+            r#"{"arn:aws:secretsmanager:us-east-1:123:secret:my-secret": "secret-value"}"#,
+        )
+        .unwrap();
+
+        let mut args = make_source_args(Some(task_path));
+        args.secrets = Some(secrets_path);
+        let td = args.load_task_def().unwrap();
+        assert!(
+            td.container_definitions[0]
+                .environment
+                .iter()
+                .any(|e| e.name == "DB_PASS" && e.value == "secret-value")
+        );
+    }
+
+    #[test]
+    fn source_args_load_task_def_secrets_warning_without_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_path = dir.path().join("task.json");
+        std::fs::write(
+            &task_path,
+            r#"{
+                "family": "test",
+                "containerDefinitions": [{
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "secrets": [{"name": "DB_PASS", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:my-secret"}]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let args = make_source_args(Some(task_path));
+        let td = args.load_task_def().unwrap();
+        assert_eq!(td.family, "test");
+        // Secrets not resolved — no secrets file provided
+        assert!(td.container_definitions[0].environment.is_empty());
     }
 }
