@@ -59,6 +59,19 @@ pub enum TaskDefError {
 
     #[error("CloudFormation intrinsic function found in {field}: {detail}")]
     CfnIntrinsicFunction { field: String, detail: String },
+
+    #[error("failed to read environment file {path}: {source}")]
+    EnvironmentFileRead {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("invalid line in environment file {path} at line {line_number}: {detail}")]
+    EnvironmentFileParse {
+        path: PathBuf,
+        line_number: usize,
+        detail: String,
+    },
 }
 
 /// ECS task definition top-level structure.
@@ -160,6 +173,10 @@ pub struct ContainerDefinition {
     /// Timeout in seconds before the container is forcibly killed (ECS default: 30).
     #[serde(default)]
     pub stop_timeout: Option<u32>,
+
+    /// Paths to environment files (.env format) for additional environment variables.
+    #[serde(default)]
+    pub environment_files: Vec<EnvironmentFile>,
 }
 
 impl Default for ContainerDefinition {
@@ -184,6 +201,7 @@ impl Default for ContainerDefinition {
             user: None,
             extra_hosts: Vec::new(),
             stop_timeout: None,
+            environment_files: Vec::new(),
         }
     }
 }
@@ -316,6 +334,79 @@ pub struct ExtraHost {
     pub hostname: String,
     /// IP address to map to.
     pub ip_address: String,
+}
+
+/// Environment file reference (ECS environmentFiles format).
+///
+/// In ECS, `value` is an S3 ARN. Lecs treats it as a local file path
+/// and loads `.env`-formatted key-value pairs from it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentFile {
+    /// File path (S3 ARN in ECS; local path in Lecs).
+    pub value: String,
+    /// File type — always "s3" in ECS. Lecs ignores this field.
+    #[serde(default = "default_env_file_type")]
+    pub r#type: String,
+}
+
+fn default_env_file_type() -> String {
+    "s3".to_string()
+}
+
+/// Load environment variables from `.env`-formatted files.
+///
+/// Each file is read line by line. Lines starting with `#` are comments,
+/// empty lines are skipped, and lines without `=` are ignored.
+/// Returns key-value pairs in insertion order; later files override earlier ones.
+pub fn load_environment_files(
+    files: &[EnvironmentFile],
+    base_dir: &Path,
+) -> Result<Vec<(String, String)>, TaskDefError> {
+    let mut vars = Vec::new();
+    for ef in files {
+        let path = base_dir.join(&ef.value);
+        let content = std::fs::read_to_string(&path).map_err(|source| {
+            TaskDefError::EnvironmentFileRead {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        for (line_number, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let value = value.trim().to_string();
+                // Strip surrounding quotes if present
+                let value = strip_quotes(&value);
+                if !key.is_empty() {
+                    vars.push((key, value));
+                }
+            } else {
+                tracing::warn!(
+                    file = %path.display(),
+                    line = line_number + 1,
+                    "Skipping line without '=' in environment file"
+                );
+            }
+        }
+    }
+    Ok(vars)
+}
+
+/// Strip matching surrounding single or double quotes from a value.
+fn strip_quotes(s: &str) -> String {
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"'))
+            || (s.starts_with('\'') && s.ends_with('\'')))
+    {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 const fn default_health_interval() -> u32 {
@@ -1746,5 +1837,157 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert!(td.container_definitions[0].stop_timeout.is_none());
+    }
+
+    // --- environmentFiles tests ---
+
+    #[test]
+    fn parse_environment_files_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environmentFiles": [
+                    { "value": "app.env", "type": "s3" }
+                ]
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].environment_files.len(), 1);
+        assert_eq!(td.container_definitions[0].environment_files[0].value, "app.env");
+        assert_eq!(td.container_definitions[0].environment_files[0].r#type, "s3");
+    }
+
+    #[test]
+    fn parse_environment_files_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{ "name": "app", "image": "nginx:latest" }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].environment_files.is_empty());
+    }
+
+    #[test]
+    fn parse_environment_files_type_defaults_to_s3() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "environmentFiles": [{ "value": "test.env" }]
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].environment_files[0].r#type, "s3");
+    }
+
+    #[test]
+    fn load_environment_files_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.env"), "FOO=bar\nBAZ=qux\n").unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(vars, vec![
+            ("FOO".to_string(), "bar".to_string()),
+            ("BAZ".to_string(), "qux".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn load_environment_files_comments_and_empty_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.env"),
+            "# This is a comment\n\nFOO=bar\n  \n# Another comment\nBAZ=qux\n",
+        )
+        .unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0], ("FOO".to_string(), "bar".to_string()));
+    }
+
+    #[test]
+    fn load_environment_files_quoted_values() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.env"),
+            "FOO=\"hello world\"\nBAR='single quoted'\n",
+        )
+        .unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(vars[0], ("FOO".to_string(), "hello world".to_string()));
+        assert_eq!(vars[1], ("BAR".to_string(), "single quoted".to_string()));
+    }
+
+    #[test]
+    fn load_environment_files_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![EnvironmentFile {
+            value: "nonexistent.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let result = load_environment_files(&files, dir.path());
+        assert!(matches!(result, Err(TaskDefError::EnvironmentFileRead { .. })));
+    }
+
+    #[test]
+    fn load_environment_files_value_with_equals() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.env"), "CONNECTION=host=db;port=5432\n").unwrap();
+        let files = vec![EnvironmentFile {
+            value: "test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(
+            vars[0],
+            ("CONNECTION".to_string(), "host=db;port=5432".to_string())
+        );
+    }
+
+    #[test]
+    fn load_environment_files_multiple_files_ordering() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.env"), "FOO=first\nBAR=a\n").unwrap();
+        std::fs::write(dir.path().join("b.env"), "FOO=second\nBAZ=b\n").unwrap();
+        let files = vec![
+            EnvironmentFile {
+                value: "a.env".to_string(),
+                r#type: "s3".to_string(),
+            },
+            EnvironmentFile {
+                value: "b.env".to_string(),
+                r#type: "s3".to_string(),
+            },
+        ];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        // Both FOO entries are present; the caller decides override order
+        assert_eq!(vars.len(), 4);
+        assert_eq!(vars[0].0, "FOO");
+        assert_eq!(vars[0].1, "first");
+        assert_eq!(vars[2].0, "FOO");
+        assert_eq!(vars[2].1, "second");
+    }
+
+    #[test]
+    fn strip_quotes_removes_matching_quotes() {
+        assert_eq!(strip_quotes("\"hello\""), "hello");
+        assert_eq!(strip_quotes("'hello'"), "hello");
+        assert_eq!(strip_quotes("hello"), "hello");
+        assert_eq!(strip_quotes("\"mismatched'"), "\"mismatched'");
+        assert_eq!(strip_quotes("\"\""), "");
     }
 }

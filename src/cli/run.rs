@@ -82,6 +82,29 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         );
     }
 
+    // Load environment files (.env format) if specified in container definitions
+    let base_dir = input_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    for container in &mut task_def.container_definitions {
+        if !container.environment_files.is_empty() {
+            let env_vars =
+                crate::taskdef::load_environment_files(&container.environment_files, base_dir)?;
+            // environmentFiles are loaded first; explicit environment entries override them.
+            // We prepend env file vars so that container.environment (appended later) wins.
+            let existing: Vec<Environment> = std::mem::take(&mut container.environment);
+            for (name, value) in env_vars {
+                container.environment.push(Environment { name, value });
+            }
+            // Re-append existing environment entries so they take precedence
+            container.environment.extend(existing);
+            tracing::info!(
+                container = %container.name,
+                "Loaded environment files"
+            );
+        }
+    }
+
     // Dry-run: display resolved configuration and exit
     if args.dry_run {
         let secret_names: HashSet<String> = task_def
