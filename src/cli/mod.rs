@@ -73,8 +73,11 @@ pub struct ExecArgs {
     pub command: Vec<String>,
 }
 
+/// Common arguments for specifying the task definition source, overrides, secrets, and profile.
+///
+/// Shared by `run`, `validate`, and `watch` commands via `#[command(flatten)]`.
 #[derive(Parser)]
-pub struct WatchArgs {
+pub struct TaskDefSourceArgs {
     /// Path to ECS task definition JSON file
     #[arg(
         short = 'f',
@@ -111,6 +114,13 @@ pub struct WatchArgs {
     /// Profile name for loading convention-based override/secrets files
     #[arg(short, long)]
     pub profile: Option<String>,
+}
+
+#[derive(Parser)]
+pub struct WatchArgs {
+    /// Task definition source, overrides, secrets, and profile
+    #[command(flatten)]
+    pub source: TaskDefSourceArgs,
 
     /// Disable the ECS metadata/credentials sidecar server
     #[arg(long)]
@@ -143,42 +153,9 @@ pub struct StatsArgs {
 
 #[derive(Parser)]
 pub struct ValidateArgs {
-    /// Path to ECS task definition JSON file
-    #[arg(
-        short = 'f',
-        long = "task-definition",
-        conflicts_with_all = ["from_tf", "from_cfn"],
-        required_unless_present_any = ["from_tf", "from_cfn"]
-    )]
-    pub task_definition: Option<PathBuf>,
-
-    /// Path to Terraform show JSON file (alternative to --task-definition)
-    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn"])]
-    pub from_tf: Option<PathBuf>,
-
-    /// Terraform resource address (required when multiple ECS task definitions exist)
-    #[arg(long = "tf-resource", requires = "from_tf")]
-    pub tf_resource: Option<String>,
-
-    /// Path to `CloudFormation` template JSON file (alternative to --task-definition)
-    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf"])]
-    pub from_cfn: Option<PathBuf>,
-
-    /// `CloudFormation` logical resource ID (required when multiple ECS task definitions exist)
-    #[arg(long = "cfn-resource", requires = "from_cfn")]
-    pub cfn_resource: Option<String>,
-
-    /// Path to local override file (optional, validates cross-references)
-    #[arg(short, long)]
-    pub r#override: Option<PathBuf>,
-
-    /// Path to local secrets mapping file (optional)
-    #[arg(short, long)]
-    pub secrets: Option<PathBuf>,
-
-    /// Profile name for loading convention-based override/secrets files
-    #[arg(short, long)]
-    pub profile: Option<String>,
+    /// Task definition source, overrides, secrets, and profile
+    #[command(flatten)]
+    pub source: TaskDefSourceArgs,
 }
 
 #[derive(Parser)]
@@ -198,42 +175,9 @@ pub struct InitArgs {
 
 #[derive(Parser)]
 pub struct RunArgs {
-    /// Path to ECS task definition JSON file
-    #[arg(
-        short = 'f',
-        long = "task-definition",
-        conflicts_with_all = ["from_tf", "from_cfn"],
-        required_unless_present_any = ["from_tf", "from_cfn"]
-    )]
-    pub task_definition: Option<PathBuf>,
-
-    /// Path to Terraform show JSON file (alternative to --task-definition)
-    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn"])]
-    pub from_tf: Option<PathBuf>,
-
-    /// Terraform resource address (required when multiple ECS task definitions exist)
-    #[arg(long = "tf-resource", requires = "from_tf")]
-    pub tf_resource: Option<String>,
-
-    /// Path to `CloudFormation` template JSON file (alternative to --task-definition)
-    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf"])]
-    pub from_cfn: Option<PathBuf>,
-
-    /// `CloudFormation` logical resource ID (required when multiple ECS task definitions exist)
-    #[arg(long = "cfn-resource", requires = "from_cfn")]
-    pub cfn_resource: Option<String>,
-
-    /// Path to local override file
-    #[arg(short, long)]
-    pub r#override: Option<PathBuf>,
-
-    /// Path to local secrets mapping file
-    #[arg(short, long)]
-    pub secrets: Option<PathBuf>,
-
-    /// Profile name for loading convention-based override/secrets files
-    #[arg(short, long)]
-    pub profile: Option<String>,
+    /// Task definition source, overrides, secrets, and profile
+    #[command(flatten)]
+    pub source: TaskDefSourceArgs,
 
     /// Disable the ECS metadata/credentials sidecar server
     #[arg(long)]
@@ -307,11 +251,11 @@ mod tests {
         match cli.command {
             Command::Run(args) => {
                 assert_eq!(
-                    args.task_definition.as_ref().unwrap().to_str(),
+                    args.source.task_definition.as_ref().unwrap().to_str(),
                     Some("task.json")
                 );
-                assert!(args.r#override.is_none());
-                assert!(args.secrets.is_none());
+                assert!(args.source.r#override.is_none());
+                assert!(args.source.secrets.is_none());
             }
             _ => panic!("expected Run command"),
         }
@@ -356,15 +300,15 @@ mod tests {
         match cli.command {
             Command::Run(args) => {
                 assert_eq!(
-                    args.task_definition.as_ref().unwrap().to_str(),
+                    args.source.task_definition.as_ref().unwrap().to_str(),
                     Some("task.json")
                 );
                 assert_eq!(
-                    args.r#override.as_ref().unwrap().to_str(),
+                    args.source.r#override.as_ref().unwrap().to_str(),
                     Some("override.json")
                 );
                 assert_eq!(
-                    args.secrets.as_ref().unwrap().to_str(),
+                    args.source.secrets.as_ref().unwrap().to_str(),
                     Some("secrets.json")
                 );
             }
@@ -495,11 +439,11 @@ mod tests {
         match cli.command {
             Command::Validate(args) => {
                 assert_eq!(
-                    args.task_definition.as_ref().unwrap().to_str(),
+                    args.source.task_definition.as_ref().unwrap().to_str(),
                     Some("task.json")
                 );
-                assert!(args.r#override.is_none());
-                assert!(args.secrets.is_none());
+                assert!(args.source.r#override.is_none());
+                assert!(args.source.secrets.is_none());
             }
             _ => panic!("expected Validate command"),
         }
@@ -519,7 +463,7 @@ mod tests {
         match cli.command {
             Command::Validate(args) => {
                 assert_eq!(
-                    args.r#override.as_ref().unwrap().to_str(),
+                    args.source.r#override.as_ref().unwrap().to_str(),
                     Some("override.json")
                 );
             }
@@ -541,7 +485,7 @@ mod tests {
         match cli.command {
             Command::Validate(args) => {
                 assert_eq!(
-                    args.secrets.as_ref().unwrap().to_str(),
+                    args.source.secrets.as_ref().unwrap().to_str(),
                     Some("secrets.json")
                 );
             }
@@ -634,7 +578,7 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.profile.as_deref(), Some("dev"));
+                assert_eq!(args.source.profile.as_deref(), Some("dev"));
             }
             _ => panic!("expected Run command"),
         }
@@ -646,7 +590,7 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.profile.as_deref(), Some("staging"));
+                assert_eq!(args.source.profile.as_deref(), Some("staging"));
             }
             _ => panic!("expected Run command"),
         }
@@ -667,9 +611,9 @@ mod tests {
         .expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.profile.as_deref(), Some("dev"));
+                assert_eq!(args.source.profile.as_deref(), Some("dev"));
                 assert_eq!(
-                    args.r#override.as_ref().unwrap().to_str(),
+                    args.source.r#override.as_ref().unwrap().to_str(),
                     Some("custom.json")
                 );
             }
@@ -682,7 +626,7 @@ mod tests {
         let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert!(args.profile.is_none());
+                assert!(args.source.profile.is_none());
             }
             _ => panic!("expected Run command"),
         }
@@ -694,7 +638,7 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Validate(args) => {
-                assert_eq!(args.profile.as_deref(), Some("dev"));
+                assert_eq!(args.source.profile.as_deref(), Some("dev"));
             }
             _ => panic!("expected Validate command"),
         }
@@ -729,7 +673,7 @@ mod tests {
         match cli.command {
             Command::Watch(args) => {
                 assert_eq!(
-                    args.task_definition.as_ref().unwrap().to_str(),
+                    args.source.task_definition.as_ref().unwrap().to_str(),
                     Some("task.json")
                 );
                 assert_eq!(args.debounce, 500);
@@ -784,9 +728,12 @@ mod tests {
             Cli::try_parse_from(["lecs", "run", "--from-tf", "plan.json"]).expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert!(args.task_definition.is_none());
-                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
-                assert!(args.tf_resource.is_none());
+                assert!(args.source.task_definition.is_none());
+                assert_eq!(
+                    args.source.from_tf.as_ref().unwrap().to_str(),
+                    Some("plan.json")
+                );
+                assert!(args.source.tf_resource.is_none());
             }
             _ => panic!("expected Run command"),
         }
@@ -805,9 +752,12 @@ mod tests {
         .expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
                 assert_eq!(
-                    args.tf_resource.as_deref(),
+                    args.source.from_tf.as_ref().unwrap().to_str(),
+                    Some("plan.json")
+                );
+                assert_eq!(
+                    args.source.tf_resource.as_deref(),
                     Some("aws_ecs_task_definition.app")
                 );
             }
@@ -852,8 +802,11 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Validate(args) => {
-                assert!(args.task_definition.is_none());
-                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
+                assert!(args.source.task_definition.is_none());
+                assert_eq!(
+                    args.source.from_tf.as_ref().unwrap().to_str(),
+                    Some("plan.json")
+                );
             }
             _ => panic!("expected Validate command"),
         }
@@ -865,8 +818,11 @@ mod tests {
             Cli::try_parse_from(["lecs", "watch", "--from-tf", "plan.json"]).expect("should parse");
         match cli.command {
             Command::Watch(args) => {
-                assert!(args.task_definition.is_none());
-                assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
+                assert!(args.source.task_definition.is_none());
+                assert_eq!(
+                    args.source.from_tf.as_ref().unwrap().to_str(),
+                    Some("plan.json")
+                );
             }
             _ => panic!("expected Watch command"),
         }
@@ -878,13 +834,13 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Run(args) => {
-                assert!(args.task_definition.is_none());
-                assert!(args.from_tf.is_none());
+                assert!(args.source.task_definition.is_none());
+                assert!(args.source.from_tf.is_none());
                 assert_eq!(
-                    args.from_cfn.as_ref().unwrap().to_str(),
+                    args.source.from_cfn.as_ref().unwrap().to_str(),
                     Some("template.json")
                 );
-                assert!(args.cfn_resource.is_none());
+                assert!(args.source.cfn_resource.is_none());
             }
             _ => panic!("expected Run command"),
         }
@@ -904,10 +860,10 @@ mod tests {
         match cli.command {
             Command::Run(args) => {
                 assert_eq!(
-                    args.from_cfn.as_ref().unwrap().to_str(),
+                    args.source.from_cfn.as_ref().unwrap().to_str(),
                     Some("template.json")
                 );
-                assert_eq!(args.cfn_resource.as_deref(), Some("MyTaskDef"));
+                assert_eq!(args.source.cfn_resource.as_deref(), Some("MyTaskDef"));
             }
             _ => panic!("expected Run command"),
         }
@@ -948,10 +904,10 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Validate(args) => {
-                assert!(args.task_definition.is_none());
-                assert!(args.from_tf.is_none());
+                assert!(args.source.task_definition.is_none());
+                assert!(args.source.from_tf.is_none());
                 assert_eq!(
-                    args.from_cfn.as_ref().unwrap().to_str(),
+                    args.source.from_cfn.as_ref().unwrap().to_str(),
                     Some("template.json")
                 );
             }
@@ -997,10 +953,10 @@ mod tests {
             .expect("should parse");
         match cli.command {
             Command::Watch(args) => {
-                assert!(args.task_definition.is_none());
-                assert!(args.from_tf.is_none());
+                assert!(args.source.task_definition.is_none());
+                assert!(args.source.from_tf.is_none());
                 assert_eq!(
-                    args.from_cfn.as_ref().unwrap().to_str(),
+                    args.source.from_cfn.as_ref().unwrap().to_str(),
                     Some("template.json")
                 );
             }

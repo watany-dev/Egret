@@ -29,10 +29,11 @@ use crate::taskdef::{
 pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     // Determine the input file path for profile resolution.
     let input_path = args
+        .source
         .task_definition
         .as_deref()
-        .or(args.from_tf.as_deref())
-        .or(args.from_cfn.as_deref())
+        .or(args.source.from_tf.as_deref())
+        .or(args.source.from_cfn.as_deref())
         .ok_or_else(|| {
             anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
         })?;
@@ -40,15 +41,15 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     // Resolve profile paths
     let resolved = profile::resolve_from_args(
         input_path,
-        args.profile.as_deref(),
-        args.r#override.as_deref(),
-        args.secrets.as_deref(),
+        args.source.profile.as_deref(),
+        args.source.r#override.as_deref(),
+        args.source.secrets.as_deref(),
     )?;
 
-    let mut task_def = if let Some(tf_path) = &args.from_tf {
-        terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())?
-    } else if let Some(cfn_path) = &args.from_cfn {
-        cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())?
+    let mut task_def = if let Some(tf_path) = &args.source.from_tf {
+        terraform::from_terraform_file(tf_path, args.source.tf_resource.as_deref())?
+    } else if let Some(cfn_path) = &args.source.from_cfn {
+        cloudformation::from_cfn_file(cfn_path, args.source.cfn_resource.as_deref())?
     } else {
         TaskDefinition::from_file(input_path)?
     };
