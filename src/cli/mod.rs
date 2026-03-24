@@ -84,18 +84,26 @@ pub struct WatchArgs {
     #[arg(
         short = 'f',
         long = "task-definition",
-        conflicts_with = "from_tf",
-        required_unless_present = "from_tf"
+        conflicts_with_all = ["from_tf", "from_cfn"],
+        required_unless_present_any = ["from_tf", "from_cfn"]
     )]
     pub task_definition: Option<PathBuf>,
 
     /// Path to Terraform show JSON file (alternative to --task-definition)
-    #[arg(long = "from-tf", conflicts_with = "task_definition")]
+    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn"])]
     pub from_tf: Option<PathBuf>,
 
     /// Terraform resource address (required when multiple ECS task definitions exist)
     #[arg(long = "tf-resource", requires = "from_tf")]
     pub tf_resource: Option<String>,
+
+    /// Path to `CloudFormation` template JSON file (alternative to --task-definition)
+    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf"])]
+    pub from_cfn: Option<PathBuf>,
+
+    /// `CloudFormation` logical resource ID (required when multiple ECS task definitions exist)
+    #[arg(long = "cfn-resource", requires = "from_cfn")]
+    pub cfn_resource: Option<String>,
 
     /// Path to local override file
     #[arg(short, long)]
@@ -151,18 +159,26 @@ pub struct ValidateArgs {
     #[arg(
         short = 'f',
         long = "task-definition",
-        conflicts_with = "from_tf",
-        required_unless_present = "from_tf"
+        conflicts_with_all = ["from_tf", "from_cfn"],
+        required_unless_present_any = ["from_tf", "from_cfn"]
     )]
     pub task_definition: Option<PathBuf>,
 
     /// Path to Terraform show JSON file (alternative to --task-definition)
-    #[arg(long = "from-tf", conflicts_with = "task_definition")]
+    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn"])]
     pub from_tf: Option<PathBuf>,
 
     /// Terraform resource address (required when multiple ECS task definitions exist)
     #[arg(long = "tf-resource", requires = "from_tf")]
     pub tf_resource: Option<String>,
+
+    /// Path to `CloudFormation` template JSON file (alternative to --task-definition)
+    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf"])]
+    pub from_cfn: Option<PathBuf>,
+
+    /// `CloudFormation` logical resource ID (required when multiple ECS task definitions exist)
+    #[arg(long = "cfn-resource", requires = "from_cfn")]
+    pub cfn_resource: Option<String>,
 
     /// Path to local override file (optional, validates cross-references)
     #[arg(short, long)]
@@ -198,18 +214,26 @@ pub struct RunArgs {
     #[arg(
         short = 'f',
         long = "task-definition",
-        conflicts_with = "from_tf",
-        required_unless_present = "from_tf"
+        conflicts_with_all = ["from_tf", "from_cfn"],
+        required_unless_present_any = ["from_tf", "from_cfn"]
     )]
     pub task_definition: Option<PathBuf>,
 
     /// Path to Terraform show JSON file (alternative to --task-definition)
-    #[arg(long = "from-tf", conflicts_with = "task_definition")]
+    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn"])]
     pub from_tf: Option<PathBuf>,
 
     /// Terraform resource address (required when multiple ECS task definitions exist)
     #[arg(long = "tf-resource", requires = "from_tf")]
     pub tf_resource: Option<String>,
+
+    /// Path to `CloudFormation` template JSON file (alternative to --task-definition)
+    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf"])]
+    pub from_cfn: Option<PathBuf>,
+
+    /// `CloudFormation` logical resource ID (required when multiple ECS task definitions exist)
+    #[arg(long = "cfn-resource", requires = "from_cfn")]
+    pub cfn_resource: Option<String>,
 
     /// Path to local override file
     #[arg(short, long)]
@@ -902,6 +926,110 @@ mod tests {
             Command::Watch(args) => {
                 assert!(args.task_definition.is_none());
                 assert_eq!(args.from_tf.as_ref().unwrap().to_str(), Some("plan.json"));
+            }
+            _ => panic!("expected Watch command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_with_from_cfn() {
+        let cli = Cli::try_parse_from(["lecs", "run", "--from-cfn", "template.json"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.task_definition.is_none());
+                assert!(args.from_tf.is_none());
+                assert_eq!(
+                    args.from_cfn.as_ref().unwrap().to_str(),
+                    Some("template.json")
+                );
+                assert!(args.cfn_resource.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_from_cfn_with_resource() {
+        let cli = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "--from-cfn",
+            "template.json",
+            "--cfn-resource",
+            "MyTaskDef",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(
+                    args.from_cfn.as_ref().unwrap().to_str(),
+                    Some("template.json")
+                );
+                assert_eq!(args.cfn_resource.as_deref(), Some("MyTaskDef"));
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_cfn_conflicts_with_tf() {
+        let result = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "--from-cfn",
+            "template.json",
+            "--from-tf",
+            "plan.json",
+        ]);
+        assert!(
+            result.is_err(),
+            "should fail: --from-cfn and --from-tf conflict"
+        );
+    }
+
+    #[test]
+    fn parse_run_cfn_conflicts_with_f() {
+        let result = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "-f",
+            "task.json",
+            "--from-cfn",
+            "template.json",
+        ]);
+        assert!(result.is_err(), "should fail: -f and --from-cfn conflict");
+    }
+
+    #[test]
+    fn parse_validate_with_from_cfn() {
+        let cli = Cli::try_parse_from(["lecs", "validate", "--from-cfn", "template.json"])
+            .expect("should parse");
+        match cli.command {
+            Command::Validate(args) => {
+                assert!(args.task_definition.is_none());
+                assert!(args.from_tf.is_none());
+                assert_eq!(
+                    args.from_cfn.as_ref().unwrap().to_str(),
+                    Some("template.json")
+                );
+            }
+            _ => panic!("expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn parse_watch_with_from_cfn() {
+        let cli = Cli::try_parse_from(["lecs", "watch", "--from-cfn", "template.json"])
+            .expect("should parse");
+        match cli.command {
+            Command::Watch(args) => {
+                assert!(args.task_definition.is_none());
+                assert!(args.from_tf.is_none());
+                assert_eq!(
+                    args.from_cfn.as_ref().unwrap().to_str(),
+                    Some("template.json")
+                );
             }
             _ => panic!("expected Watch command"),
         }

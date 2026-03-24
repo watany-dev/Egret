@@ -20,7 +20,7 @@ use crate::overrides::OverrideConfig;
 use crate::profile;
 use crate::secrets::SecretsResolver;
 use crate::taskdef::{
-    ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume, terraform,
+    ContainerDefinition, Environment, MountPoint, TaskDefinition, Volume, cloudformation, terraform,
 };
 
 /// Execute the `run` subcommand.
@@ -32,7 +32,10 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
         .task_definition
         .as_deref()
         .or(args.from_tf.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("either --task-definition or --from-tf must be provided"))?;
+        .or(args.from_cfn.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!("either --task-definition, --from-tf, or --from-cfn must be provided")
+        })?;
 
     // Resolve profile paths
     let resolved = profile::resolve_from_args(
@@ -44,6 +47,8 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
 
     let mut task_def = if let Some(tf_path) = &args.from_tf {
         terraform::from_terraform_file(tf_path, args.tf_resource.as_deref())?
+    } else if let Some(cfn_path) = &args.from_cfn {
+        cloudformation::from_cfn_file(cfn_path, args.cfn_resource.as_deref())?
     } else {
         TaskDefinition::from_file(input_path)?
     };

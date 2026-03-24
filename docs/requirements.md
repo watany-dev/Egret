@@ -142,6 +142,17 @@ ECS タスク定義をローカルで実行し、ECS アプリが期待する実
 | FR-13.6 | Terraform の volume ブロック（`host_path`）を Lecs の Volume 型に変換する | ✅ 実装済み |
 | FR-13.7 | `lecs run`, `lecs validate`, `lecs watch` で `--from-tf` を利用できる | ✅ 実装済み |
 
+### FR-14: CloudFormation / CDK テンプレート入力対応
+
+| ID | 要件 | 状態 |
+|----|------|------|
+| FR-14.1 | `--from-cfn` で CloudFormation テンプレート JSON をタスク定義として読み込める | ✅ 実装済み |
+| FR-14.2 | `--cfn-resource` で複数 ECS リソースから1つを論理IDで選択できる | ✅ 実装済み |
+| FR-14.3 | PascalCase のプロパティキーを camelCase に変換して既存型に対応する | ✅ 実装済み |
+| FR-14.4 | Intrinsic Function（`Ref`, `Fn::Sub` 等）を検出してエラーを報告する | ✅ 実装済み |
+| FR-14.5 | `lecs run`, `lecs validate`, `lecs watch` で `--from-cfn` を利用できる | ✅ 実装済み |
+| FR-14.6 | CDK synth 出力（`cdk.out/*.template.json`）を `--from-cfn` で読み込める | ✅ 実装済み |
+
 ---
 
 ## 非機能要件
