@@ -401,19 +401,19 @@ fn build_container_config(
 ) -> ContainerConfig {
     // Start with user-defined docker labels, then override with lecs management labels
     let mut labels: HashMap<String, String> = def.docker_labels.clone();
-    labels.insert("lecs.managed".into(), "true".into());
-    labels.insert("lecs.task".into(), family.into());
-    labels.insert("lecs.container".into(), def.name.clone());
+    labels.insert(crate::labels::MANAGED.into(), "true".into());
+    labels.insert(crate::labels::TASK.into(), family.into());
+    labels.insert(crate::labels::CONTAINER.into(), def.name.clone());
 
     // Store secret names for inspect masking
     if !def.secrets.is_empty() {
         let secret_names: Vec<String> = def.secrets.iter().map(|s| s.name.clone()).collect();
-        labels.insert("lecs.secrets".into(), secret_names.join(","));
+        labels.insert(crate::labels::SECRETS.into(), secret_names.join(","));
     }
 
     // Store stop timeout for cleanup
     if let Some(timeout) = def.stop_timeout {
-        labels.insert("lecs.stop_timeout".into(), timeout.to_string());
+        labels.insert(crate::labels::STOP_TIMEOUT.into(), timeout.to_string());
     }
 
     // Store dependency info for ps display
@@ -423,7 +423,7 @@ fn build_container_config(
             .iter()
             .map(|d| format!("{}:{:?}", d.container_name, d.condition))
             .collect();
-        labels.insert("lecs.depends_on".into(), deps.join(","));
+        labels.insert(crate::labels::DEPENDS_ON.into(), deps.join(","));
     }
 
     let mut env: Vec<String> = def
@@ -917,9 +917,9 @@ mod tests {
         assert_eq!(config.port_mappings[0].protocol, "tcp");
         assert_eq!(config.network, "lecs-my-app");
         assert_eq!(config.network_aliases, vec!["app"]);
-        assert_eq!(config.labels.get("lecs.managed").unwrap(), "true");
-        assert_eq!(config.labels.get("lecs.task").unwrap(), "my-app");
-        assert_eq!(config.labels.get("lecs.container").unwrap(), "app");
+        assert_eq!(config.labels.get(crate::labels::MANAGED).unwrap(), "true");
+        assert_eq!(config.labels.get(crate::labels::TASK).unwrap(), "my-app");
+        assert_eq!(config.labels.get(crate::labels::CONTAINER).unwrap(), "app");
     }
 
     #[test]
@@ -949,7 +949,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             docker_labels: HashMap::from([
                 ("com.example.env".into(), "dev".into()),
-                ("lecs.managed".into(), "user-override".into()),
+                (crate::labels::MANAGED.into(), "user-override".into()),
             ]),
             ..Default::default()
         };
@@ -959,7 +959,7 @@ mod tests {
         // User labels are included
         assert_eq!(config.labels.get("com.example.env").unwrap(), "dev");
         // Lecs management labels take precedence over user labels
-        assert_eq!(config.labels.get("lecs.managed").unwrap(), "true");
+        assert_eq!(config.labels.get(crate::labels::MANAGED).unwrap(), "true");
     }
 
     #[test]
@@ -1515,7 +1515,10 @@ mod tests {
         assert_eq!(config.memory_reservation_mib, Some(256));
         assert_eq!(config.working_dir.as_deref(), Some("/app"));
         assert_eq!(config.user.as_deref(), Some("1000:1000"));
-        assert_eq!(config.labels.get("lecs.stop_timeout").unwrap(), "60");
+        assert_eq!(
+            config.labels.get(crate::labels::STOP_TIMEOUT).unwrap(),
+            "60"
+        );
     }
 
     #[test]

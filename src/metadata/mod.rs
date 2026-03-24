@@ -171,9 +171,9 @@ pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> Cont
     );
 
     let labels = HashMap::from([
-        ("lecs.managed".to_string(), "true".to_string()),
-        ("lecs.task".to_string(), family.to_string()),
-        ("lecs.container".to_string(), def.name.clone()),
+        (crate::labels::MANAGED.to_string(), "true".to_string()),
+        (crate::labels::TASK.to_string(), family.to_string()),
+        (crate::labels::CONTAINER.to_string(), def.name.clone()),
     ]);
 
     let limits = match (def.cpu, def.memory) {

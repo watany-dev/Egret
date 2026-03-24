@@ -219,7 +219,7 @@ async fn create_and_start_container(
     let family = spec
         .config
         .labels
-        .get("lecs.task")
+        .get(crate::labels::TASK)
         .cloned()
         .unwrap_or_default();
     let id = client.create_container(&spec.config).await.map_err(|e| {
@@ -313,7 +313,7 @@ pub async fn orchestrate_startup(
                         let dep_family = dep_spec
                             .config
                             .labels
-                            .get("lecs.task")
+                            .get(crate::labels::TASK)
                             .map(String::as_str)
                             .unwrap_or_default();
                         let dep_health_check = dep_spec.health_check.as_ref();
