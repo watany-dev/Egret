@@ -177,6 +177,10 @@ pub struct ContainerDefinition {
     /// Paths to environment files (.env format) for additional environment variables.
     #[serde(default)]
     pub environment_files: Vec<EnvironmentFile>,
+
+    /// Resource limits (ulimits) for the container.
+    #[serde(default)]
+    pub ulimits: Vec<Ulimit>,
 }
 
 impl Default for ContainerDefinition {
@@ -202,6 +206,7 @@ impl Default for ContainerDefinition {
             extra_hosts: Vec::new(),
             stop_timeout: None,
             environment_files: Vec::new(),
+            ulimits: Vec::new(),
         }
     }
 }
@@ -352,6 +357,18 @@ pub struct EnvironmentFile {
 
 fn default_env_file_type() -> String {
     "s3".to_string()
+}
+
+/// Resource limit (ulimit) for a container.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ulimit {
+    /// Ulimit name (e.g., "nofile", "memlock", "nproc").
+    pub name: String,
+    /// Soft limit.
+    pub soft_limit: i64,
+    /// Hard limit.
+    pub hard_limit: i64,
 }
 
 /// Load environment variables from `.env`-formatted files.
@@ -1980,6 +1997,40 @@ mod tests {
         assert_eq!(vars[0].1, "first");
         assert_eq!(vars[2].0, "FOO");
         assert_eq!(vars[2].1, "second");
+    }
+
+    // --- ulimits tests ---
+
+    #[test]
+    fn parse_ulimits_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{
+                "name": "app",
+                "image": "nginx:latest",
+                "ulimits": [
+                    { "name": "nofile", "softLimit": 1024, "hardLimit": 4096 },
+                    { "name": "memlock", "softLimit": -1, "hardLimit": -1 }
+                ]
+            }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].ulimits.len(), 2);
+        assert_eq!(td.container_definitions[0].ulimits[0].name, "nofile");
+        assert_eq!(td.container_definitions[0].ulimits[0].soft_limit, 1024);
+        assert_eq!(td.container_definitions[0].ulimits[0].hard_limit, 4096);
+        assert_eq!(td.container_definitions[0].ulimits[1].name, "memlock");
+        assert_eq!(td.container_definitions[0].ulimits[1].soft_limit, -1);
+    }
+
+    #[test]
+    fn parse_ulimits_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{ "name": "app", "image": "nginx:latest" }]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].ulimits.is_empty());
     }
 
     #[test]

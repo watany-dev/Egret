@@ -7,7 +7,9 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
     StatsOptions, StopContainerOptions,
 };
-use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding};
+use bollard::models::{
+    EndpointSettings, HealthConfig, HostConfig, PortBinding, ResourcesUlimits,
+};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
@@ -102,6 +104,18 @@ pub struct ContainerConfig {
     pub memory_mib: Option<u32>,
     /// Soft memory limit (MiB).
     pub memory_reservation_mib: Option<u32>,
+    /// Resource limits (ulimits) for the container.
+    pub ulimits: Vec<UlimitConfig>,
+}
+
+/// Resource limit (ulimit) configuration for a container.
+pub struct UlimitConfig {
+    /// Ulimit name (e.g., "nofile", "memlock").
+    pub name: String,
+    /// Soft limit.
+    pub soft: i64,
+    /// Hard limit.
+    pub hard: i64,
 }
 
 /// Docker HEALTHCHECK configuration (nanosecond units).
@@ -734,6 +748,21 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         memory_reservation: config
             .memory_reservation_mib
             .map(|m| i64::from(m) * 1024 * 1024),
+        ulimits: if config.ulimits.is_empty() {
+            None
+        } else {
+            Some(
+                config
+                    .ulimits
+                    .iter()
+                    .map(|u| ResourcesUlimits {
+                        name: Some(u.name.clone()),
+                        soft: Some(u.soft),
+                        hard: Some(u.hard),
+                    })
+                    .collect(),
+            )
+        },
         ..Default::default()
     };
 
@@ -1045,6 +1074,40 @@ mod tests {
         assert!(hc.nano_cpus.is_none());
         assert!(hc.memory.is_none());
         assert!(hc.memory_reservation.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_ulimits() {
+        let mut config = sample_config();
+        config.ulimits = vec![
+            UlimitConfig {
+                name: "nofile".to_string(),
+                soft: 1024,
+                hard: 4096,
+            },
+            UlimitConfig {
+                name: "memlock".to_string(),
+                soft: -1,
+                hard: -1,
+            },
+        ];
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        let ulimits = hc.ulimits.as_ref().expect("ulimits");
+        assert_eq!(ulimits.len(), 2);
+        assert_eq!(ulimits[0].name.as_deref(), Some("nofile"));
+        assert_eq!(ulimits[0].soft, Some(1024));
+        assert_eq!(ulimits[0].hard, Some(4096));
+        assert_eq!(ulimits[1].name.as_deref(), Some("memlock"));
+        assert_eq!(ulimits[1].soft, Some(-1));
+    }
+
+    #[test]
+    fn build_bollard_config_empty_ulimits() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(hc.ulimits.is_none());
     }
 
     #[test]

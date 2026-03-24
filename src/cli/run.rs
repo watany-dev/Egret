@@ -497,6 +497,15 @@ fn build_container_config(
         cpu_units: def.cpu,
         memory_mib: def.memory,
         memory_reservation_mib: def.memory_reservation,
+        ulimits: def
+            .ulimits
+            .iter()
+            .map(|u| crate::container::UlimitConfig {
+                name: u.name.clone(),
+                soft: u.soft_limit,
+                hard: u.hard_limit,
+            })
+            .collect(),
     }
 }
 
