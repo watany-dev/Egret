@@ -416,12 +416,11 @@ pub fn load_environment_files(
     let mut vars = Vec::new();
     for ef in files {
         let path = base_dir.join(&ef.value);
-        let content = std::fs::read_to_string(&path).map_err(|source| {
-            TaskDefError::EnvironmentFileRead {
+        let content =
+            std::fs::read_to_string(&path).map_err(|source| TaskDefError::EnvironmentFileRead {
                 path: path.clone(),
                 source,
-            }
-        })?;
+            })?;
         for (line_number, line) in content.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -450,8 +449,7 @@ pub fn load_environment_files(
 /// Strip matching surrounding single or double quotes from a value.
 fn strip_quotes(s: &str) -> String {
     if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"'))
-            || (s.starts_with('\'') && s.ends_with('\'')))
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
     {
         s[1..s.len() - 1].to_string()
     } else {
@@ -1905,8 +1903,14 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert_eq!(td.container_definitions[0].environment_files.len(), 1);
-        assert_eq!(td.container_definitions[0].environment_files[0].value, "app.env");
-        assert_eq!(td.container_definitions[0].environment_files[0].r#type, "s3");
+        assert_eq!(
+            td.container_definitions[0].environment_files[0].value,
+            "app.env"
+        );
+        assert_eq!(
+            td.container_definitions[0].environment_files[0].r#type,
+            "s3"
+        );
     }
 
     #[test]
@@ -1930,7 +1934,10 @@ mod tests {
             }]
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
-        assert_eq!(td.container_definitions[0].environment_files[0].r#type, "s3");
+        assert_eq!(
+            td.container_definitions[0].environment_files[0].r#type,
+            "s3"
+        );
     }
 
     #[test]
@@ -1942,10 +1949,13 @@ mod tests {
             r#type: "s3".to_string(),
         }];
         let vars = load_environment_files(&files, dir.path()).unwrap();
-        assert_eq!(vars, vec![
-            ("FOO".to_string(), "bar".to_string()),
-            ("BAZ".to_string(), "qux".to_string()),
-        ]);
+        assert_eq!(
+            vars,
+            vec![
+                ("FOO".to_string(), "bar".to_string()),
+                ("BAZ".to_string(), "qux".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -1990,13 +2000,20 @@ mod tests {
             r#type: "s3".to_string(),
         }];
         let result = load_environment_files(&files, dir.path());
-        assert!(matches!(result, Err(TaskDefError::EnvironmentFileRead { .. })));
+        assert!(matches!(
+            result,
+            Err(TaskDefError::EnvironmentFileRead { .. })
+        ));
     }
 
     #[test]
     fn load_environment_files_value_with_equals() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("test.env"), "CONNECTION=host=db;port=5432\n").unwrap();
+        std::fs::write(
+            dir.path().join("test.env"),
+            "CONNECTION=host=db;port=5432\n",
+        )
+        .unwrap();
         let files = vec![EnvironmentFile {
             value: "test.env".to_string(),
             r#type: "s3".to_string(),
@@ -2053,7 +2070,10 @@ mod tests {
             }]
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
-        let lp = td.container_definitions[0].linux_parameters.as_ref().unwrap();
+        let lp = td.container_definitions[0]
+            .linux_parameters
+            .as_ref()
+            .unwrap();
         assert_eq!(lp.init_process_enabled, Some(true));
         assert_eq!(lp.shared_memory_size, Some(256));
         assert_eq!(lp.tmpfs.len(), 1);
@@ -2073,7 +2093,10 @@ mod tests {
             }]
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
-        let lp = td.container_definitions[0].linux_parameters.as_ref().unwrap();
+        let lp = td.container_definitions[0]
+            .linux_parameters
+            .as_ref()
+            .unwrap();
         assert_eq!(lp.init_process_enabled, Some(true));
         assert!(lp.shared_memory_size.is_none());
         assert!(lp.tmpfs.is_empty());

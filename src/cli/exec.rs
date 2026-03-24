@@ -32,9 +32,7 @@ pub async fn execute(args: &ExecArgs, host: Option<&str>) -> Result<()> {
 
     if let Some(code) = result.exit_code {
         if code != 0 {
-            std::process::exit(
-                i32::try_from(code).unwrap_or(1),
-            );
+            std::process::exit(i32::try_from(code).unwrap_or(1));
         }
     }
 

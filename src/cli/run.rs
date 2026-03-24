@@ -655,7 +655,11 @@ fn format_container_dry_run(
     if !container.ulimits.is_empty() {
         output.push_str("  Ulimits:\n");
         for u in &container.ulimits {
-            let _ = writeln!(output, "    {}: soft={}, hard={}", u.name, u.soft_limit, u.hard_limit);
+            let _ = writeln!(
+                output,
+                "    {}: soft={}, hard={}",
+                u.name, u.soft_limit, u.hard_limit
+            );
         }
     }
 
@@ -1442,9 +1446,7 @@ mod tests {
 
     #[test]
     fn display_dry_run_new_fields() {
-        use crate::taskdef::{
-            EnvironmentFile, LinuxParameters, TmpfsMount, Ulimit,
-        };
+        use crate::taskdef::{EnvironmentFile, LinuxParameters, TmpfsMount, Ulimit};
         let td = TaskDefinition {
             family: "test".to_string(),
             task_role_arn: None,

@@ -8,9 +8,7 @@ use bollard::container::{
     RemoveContainerOptions, StatsOptions, StopContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecResults};
-use bollard::models::{
-    EndpointSettings, HealthConfig, HostConfig, PortBinding, ResourcesUlimits,
-};
+use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding, ResourcesUlimits};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
@@ -26,7 +24,10 @@ pub enum ContainerError {
     Api(#[from] bollard::errors::Error),
 
     #[error("exec failed on container {container_id}: {detail}")]
-    ExecFailed { container_id: String, detail: String },
+    ExecFailed {
+        container_id: String,
+        detail: String,
+    },
 }
 
 /// Abstraction over container runtime operations for testability.
@@ -76,11 +77,7 @@ pub trait ContainerRuntime: Send + Sync {
     async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError>;
 
     /// Execute a command inside a running container.
-    async fn exec_container(
-        &self,
-        id: &str,
-        cmd: &[String],
-    ) -> Result<ExecResult, ContainerError>;
+    async fn exec_container(&self, id: &str, cmd: &[String]) -> Result<ExecResult, ContainerError>;
 }
 
 /// Result of executing a command inside a container.
@@ -675,11 +672,7 @@ impl ContainerRuntime for ContainerClient {
 
     #[cfg(not(tarpaulin_include))]
     #[allow(clippy::print_stdout, clippy::print_stderr)]
-    async fn exec_container(
-        &self,
-        id: &str,
-        cmd: &[String],
-    ) -> Result<ExecResult, ContainerError> {
+    async fn exec_container(&self, id: &str, cmd: &[String]) -> Result<ExecResult, ContainerError> {
         let exec = self
             .docker
             .create_exec(
@@ -701,22 +694,13 @@ impl ContainerRuntime for ContainerClient {
                     .try_for_each(|log| async move {
                         match log {
                             LogOutput::StdOut { message } => {
-                                print!(
-                                    "{}",
-                                    String::from_utf8_lossy(&message)
-                                );
+                                print!("{}", String::from_utf8_lossy(&message));
                             }
                             LogOutput::StdErr { message } => {
-                                eprint!(
-                                    "{}",
-                                    String::from_utf8_lossy(&message)
-                                );
+                                eprint!("{}", String::from_utf8_lossy(&message));
                             }
                             LogOutput::Console { message } => {
-                                print!(
-                                    "{}",
-                                    String::from_utf8_lossy(&message)
-                                );
+                                print!("{}", String::from_utf8_lossy(&message));
                             }
                             LogOutput::StdIn { .. } => {}
                         }
@@ -1238,7 +1222,10 @@ mod tests {
         let result = build_bollard_config(&config);
         let hc = result.host_config.as_ref().expect("host_config");
         let tmpfs = hc.tmpfs.as_ref().expect("tmpfs");
-        assert_eq!(tmpfs.get("/run").map(String::as_str), Some("size=67108864,rw,noexec"));
+        assert_eq!(
+            tmpfs.get("/run").map(String::as_str),
+            Some("size=67108864,rw,noexec")
+        );
     }
 
     #[test]
