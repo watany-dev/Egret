@@ -319,6 +319,50 @@ mod tests {
     }
 
     #[test]
+    fn execute_validated_task_def_passes() {
+        let task_json = minimal_valid_json();
+        let task_def = TaskDefinition::from_json(task_json).unwrap();
+        let result = execute_validated_task_def(&task_def, None, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn execute_validated_task_def_with_override() {
+        let task_json = minimal_valid_json();
+        let task_def = TaskDefinition::from_json(task_json).unwrap();
+        let override_json = r#"{
+            "containerOverrides": {
+                "nonexistent": { "image": "alpine:3.18" }
+            }
+        }"#;
+        let result = execute_validated_task_def(&task_def, Some(override_json), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn execute_validated_task_def_with_secrets() {
+        let task_json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "secrets": [
+                        { "name": "DB_PASS", "valueFrom": "arn:aws:secretsmanager:us-east-1:123:secret:my-secret" }
+                    ],
+                    "portMappings": [{ "containerPort": 80 }]
+                }
+            ]
+        }"#;
+        let task_def = TaskDefinition::from_json(task_json).unwrap();
+        let secrets_json = r#"{
+            "arn:aws:secretsmanager:us-east-1:123:secret:my-secret": "local-value"
+        }"#;
+        let result = execute_validated_task_def(&task_def, None, Some(secrets_json));
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn secrets_all_covered_passes() {
         let task_json = r#"{
             "family": "test",

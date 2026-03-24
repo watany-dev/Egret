@@ -482,6 +482,60 @@ mod tests {
     }
 
     #[test]
+    fn input_path_from_task_definition() {
+        let args = make_watch_args(PathBuf::from("task.json"), None, None, vec![]);
+        let path = input_path(&args).unwrap();
+        assert_eq!(path, std::path::Path::new("task.json"));
+    }
+
+    #[test]
+    fn input_path_from_tf() {
+        let args = make_watch_args_from_tf(PathBuf::from("plan.json"), None, None, None, vec![]);
+        let path = input_path(&args).unwrap();
+        assert_eq!(path, std::path::Path::new("plan.json"));
+    }
+
+    #[test]
+    fn input_path_from_cfn() {
+        let args = WatchArgs {
+            task_definition: None,
+            from_tf: None,
+            tf_resource: None,
+            from_cfn: Some(PathBuf::from("template.json")),
+            cfn_resource: None,
+            r#override: None,
+            secrets: None,
+            profile: None,
+            no_metadata: false,
+            events: false,
+            debounce: 500,
+            watch_paths: vec![],
+        };
+        let path = input_path(&args).unwrap();
+        assert_eq!(path, std::path::Path::new("template.json"));
+    }
+
+    #[test]
+    fn input_path_none_errors() {
+        let args = WatchArgs {
+            task_definition: None,
+            from_tf: None,
+            tf_resource: None,
+            from_cfn: None,
+            cfn_resource: None,
+            r#override: None,
+            secrets: None,
+            profile: None,
+            no_metadata: false,
+            events: false,
+            debounce: 500,
+            watch_paths: vec![],
+        };
+        let result = input_path(&args);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn validate_watch_paths_missing_file() {
         let paths = vec![PathBuf::from("/nonexistent/path/file.json")];
         let result = validate_watch_paths(&paths);
