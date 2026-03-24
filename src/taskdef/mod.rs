@@ -2158,4 +2158,139 @@ mod tests {
         assert_eq!(strip_quotes("\"mismatched'"), "\"mismatched'");
         assert_eq!(strip_quotes("\"\""), "");
     }
+
+    // --- Property-based tests ---
+
+    mod pbt {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(500))]
+
+            /// Property: strip_quotes never increases string length.
+            #[test]
+            fn strip_quotes_never_increases_length(s in ".*") {
+                prop_assert!(strip_quotes(&s).len() <= s.len());
+            }
+
+            /// Property: strip_quotes is idempotent — applying it twice
+            /// gives the same result as applying it once.
+            #[test]
+            fn strip_quotes_idempotent(s in ".*") {
+                let once = strip_quotes(&s);
+                let twice = strip_quotes(&once);
+                prop_assert_eq!(&once, &twice, "strip_quotes should be idempotent");
+            }
+
+            /// Property: Double-quoted strings are correctly unwrapped.
+            #[test]
+            fn strip_quotes_double_quoted(inner in "[^\"]*") {
+                let quoted = format!("\"{inner}\"");
+                prop_assert_eq!(strip_quotes(&quoted), inner);
+            }
+
+            /// Property: Single-quoted strings are correctly unwrapped.
+            #[test]
+            fn strip_quotes_single_quoted(inner in "[^']*") {
+                let quoted = format!("'{inner}'");
+                prop_assert_eq!(strip_quotes(&quoted), inner);
+            }
+
+            /// Property: Strings without matching quotes are returned unchanged.
+            #[test]
+            fn strip_quotes_unquoted_unchanged(s in "[^'\"][^'\"]*") {
+                prop_assert_eq!(strip_quotes(&s), s);
+            }
+
+            /// Property: Mismatched quotes are returned unchanged.
+            #[test]
+            fn strip_quotes_mismatched_unchanged(inner in ".{0,20}") {
+                let dq_sq = format!("\"{inner}'");
+                prop_assert_eq!(strip_quotes(&dq_sq), dq_sq);
+
+                let sq_dq = format!("'{inner}\"");
+                prop_assert_eq!(strip_quotes(&sq_dq), sq_dq);
+            }
+
+            /// Property: Single-character strings are never stripped.
+            #[test]
+            fn strip_quotes_single_char_unchanged(c in proptest::char::any()) {
+                let s = c.to_string();
+                prop_assert_eq!(strip_quotes(&s), s);
+            }
+
+            /// Property: Valid TaskDefinition JSON always parses successfully
+            /// when given well-formed input.
+            #[test]
+            fn valid_taskdef_json_parses(
+                family in "[a-zA-Z][a-zA-Z0-9_-]{0,20}",
+                name in "[a-zA-Z][a-zA-Z0-9_-]{0,20}",
+                tag in "[a-zA-Z0-9][a-zA-Z0-9._-]{0,15}",
+            ) {
+                let json = format!(
+                    r#"{{
+                        "family": "{family}",
+                        "containerDefinitions": [{{
+                            "name": "{name}",
+                            "image": "alpine:{tag}"
+                        }}]
+                    }}"#
+                );
+                let result = TaskDefinition::from_json(&json);
+                prop_assert!(result.is_ok(), "valid JSON should parse: {:?}", result.err());
+            }
+
+            /// Property: Container names matching ECS rules [a-zA-Z0-9_-]{1,255}
+            /// always pass validation.
+            #[test]
+            fn valid_container_names_pass(name in "[a-zA-Z0-9_-]{1,50}") {
+                let json = format!(
+                    r#"{{
+                        "family": "test",
+                        "containerDefinitions": [{{
+                            "name": "{name}",
+                            "image": "alpine:latest"
+                        }}]
+                    }}"#
+                );
+                let result = TaskDefinition::from_json(&json);
+                prop_assert!(result.is_ok(), "valid container name '{}' should pass: {:?}", name, result.err());
+            }
+
+            /// Property: Absolute paths without '..' pass validate_path_safety.
+            #[test]
+            fn absolute_paths_without_traversal_pass(
+                segments in proptest::collection::vec("[a-z][a-z0-9]{0,10}", 1..=5)
+            ) {
+                let path = format!("/{}", segments.join("/"));
+                let result = TaskDefinition::validate_path_safety(&path, "test", "ctx");
+                prop_assert!(result.is_ok(), "path '{}' should be safe: {:?}", path, result.err());
+            }
+
+            /// Property: Paths containing '..' always fail validate_path_safety.
+            #[test]
+            fn paths_with_traversal_fail(
+                prefix_segments in proptest::collection::vec("[a-z]{1,5}", 1..=3),
+                suffix_segments in proptest::collection::vec("[a-z]{1,5}", 0..=2),
+            ) {
+                let prefix = prefix_segments.join("/");
+                let suffix = suffix_segments.join("/");
+                let path = if suffix.is_empty() {
+                    format!("/{prefix}/..")
+                } else {
+                    format!("/{prefix}/../{suffix}")
+                };
+                let result = TaskDefinition::validate_path_safety(&path, "test", "ctx");
+                prop_assert!(result.is_err(), "path '{}' should be rejected", path);
+            }
+
+            /// Property: Relative paths always fail validate_path_safety.
+            #[test]
+            fn relative_paths_fail(path in "[a-z][a-z/]{0,20}") {
+                let result = TaskDefinition::validate_path_safety(&path, "test", "ctx");
+                prop_assert!(result.is_err(), "relative path '{}' should be rejected", path);
+            }
+        }
+    }
 }

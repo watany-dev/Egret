@@ -33,6 +33,7 @@ notify = "8"
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tempfile = "3"
+proptest = "1"
 
 [lints.rust]
 unsafe_code = "forbid"
