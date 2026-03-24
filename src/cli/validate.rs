@@ -38,10 +38,12 @@ pub fn execute(args: &ValidateArgs) -> Result<()> {
     // For Terraform/CloudFormation sources, parse and validate the converted definition.
     // For plain JSON, validate from the raw JSON (provides better error context).
     if args.source.from_tf.is_some() || args.source.from_cfn.is_some() {
-        let task_def = args
-            .source
-            .parse_task_def()
-            .context("validation failed: could not parse task definition source")?;
+        let parse_context = if args.source.from_tf.is_some() {
+            "validation failed: could not parse Terraform task definition source"
+        } else {
+            "validation failed: could not parse CloudFormation task definition source"
+        };
+        let task_def = args.source.parse_task_def().context(parse_context)?;
         return execute_validated_task_def(
             &task_def,
             override_json.as_deref(),
