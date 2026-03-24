@@ -87,6 +87,8 @@ pub struct ContainerConfig {
     pub health_check: Option<HealthCheckConfig>,
     /// Bind mount volumes (format: `host_path:container_path` or `host_path:container_path:ro`).
     pub binds: Vec<String>,
+    /// Working directory inside the container.
+    pub working_dir: Option<String>,
 }
 
 impl Default for ContainerConfig {
@@ -104,6 +106,7 @@ impl Default for ContainerConfig {
             extra_hosts: Vec::new(),
             health_check: None,
             binds: Vec::new(),
+            working_dir: None,
         }
     }
 }
@@ -766,6 +769,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         networking_config: Some(networking_config),
         labels: Some(config.labels.clone()),
         healthcheck,
+        working_dir: config.working_dir.clone(),
         ..Default::default()
     }
 }
@@ -961,6 +965,21 @@ mod tests {
         assert!(result.cmd.is_none());
         assert!(result.entrypoint.is_none());
         assert!(result.env.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_with_working_dir() {
+        let mut config = sample_config();
+        config.working_dir = Some("/app".to_string());
+        let result = build_bollard_config(&config);
+        assert_eq!(result.working_dir.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn build_bollard_config_without_working_dir() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        assert!(result.working_dir.is_none());
     }
 
     #[test]

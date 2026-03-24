@@ -453,6 +453,7 @@ fn build_container_config(
         extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],
         health_check,
         binds,
+        working_dir: def.working_directory.clone(),
     }
 }
 
@@ -528,6 +529,10 @@ fn format_container_dry_run(
 
     if let Some(hc) = &container.health_check {
         let _ = writeln!(output, "  Health check: {}", hc.command.join(" "));
+    }
+
+    if let Some(wd) = &container.working_directory {
+        let _ = writeln!(output, "  Working directory: {wd}");
     }
 
     if !container.docker_labels.is_empty() {

@@ -147,6 +147,10 @@ pub struct ContainerDefinition {
     /// Docker labels to apply to the container.
     #[serde(default)]
     pub docker_labels: HashMap<String, String>,
+
+    /// Working directory inside the container.
+    #[serde(default)]
+    pub working_directory: Option<String>,
 }
 
 impl Default for ContainerDefinition {
@@ -167,6 +171,7 @@ impl Default for ContainerDefinition {
             health_check: None,
             mount_points: Vec::new(),
             docker_labels: HashMap::new(),
+            working_directory: None,
         }
     }
 }
@@ -515,6 +520,13 @@ impl TaskDefinition {
             }
             if let Some(hc) = &container.health_check {
                 Self::validate_health_check(hc, &container.name)?;
+            }
+            if let Some(wd) = &container.working_directory {
+                Self::validate_path_safety(
+                    wd,
+                    "workingDirectory",
+                    &format!("container '{}'", container.name),
+                )?;
             }
         }
         self.validate_depends_on()?;
@@ -1558,5 +1570,62 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert!(td.container_definitions[0].docker_labels.is_empty());
+    }
+
+    #[test]
+    fn parse_working_directory() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "workingDirectory": "/app"
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(
+            td.container_definitions[0].working_directory.as_deref(),
+            Some("/app")
+        );
+    }
+
+    #[test]
+    fn validate_working_directory_relative_path_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "workingDirectory": "relative/path"
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("absolute path")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_working_directory_traversal_rejected() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "workingDirectory": "/app/../etc"
+                }
+            ]
+        }"#;
+        let err = TaskDefinition::from_json(json).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::Validation(ref msg) if msg.contains("path traversal")),
+            "unexpected error: {err}"
+        );
     }
 }
