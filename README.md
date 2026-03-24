@@ -51,9 +51,6 @@ lecs inspect my-app
 # Show resource usage (CPU, memory, I/O)
 lecs stats
 
-# Show execution history
-lecs history
-
 # Run with structured lifecycle events (NDJSON to stderr)
 lecs run -f task-definition.json --events
 
@@ -62,9 +59,6 @@ lecs stop <family-name>
 
 # Stop all running tasks
 lecs stop --all
-
-# Compare two task definitions semantically
-lecs diff task-v1.json task-v2.json
 
 # Generate shell completion scripts
 lecs completions bash > ~/.bash_completion.d/lecs
@@ -207,19 +201,6 @@ lecs stats
 lecs stats my-app
 ```
 
-### `lecs history`
-
-Displays execution history stored in `~/.lecs/history.json`.
-
-```bash
-lecs history
-lecs history --clear
-```
-
-| Flag | Description |
-|------|-------------|
-| `--clear` | Delete all execution history |
-
 ### `lecs logs`
 
 Shows logs for a specific container.
@@ -255,17 +236,6 @@ lecs watch -f task-definition.json --debounce 1000 --watch-path ./src
 | `--watch-path` | — | Additional paths to watch (repeatable) |
 | `--no-metadata` | — | Disable ECS metadata/credentials sidecar |
 | `--events` | — | Emit structured lifecycle events (NDJSON) to stderr |
-
-### `lecs diff`
-
-Compares two task definition files semantically, showing differences at the container, environment variable, and port level.
-
-```bash
-lecs diff task-v1.json task-v2.json
-lecs diff --no-color task-v1.json task-v2.json
-```
-
-Output shows added (`+`), removed (`-`), and changed (`~`) fields organized by container.
 
 ### `lecs completions`
 
@@ -470,7 +440,7 @@ The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and
 ```
 src/
 ├── main.rs              # Async entry point (clap + tokio)
-├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, history, diff, watch, completions, version
+├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, watch, completions, version
 ├── taskdef/             # ECS task definition JSON parser, validation diagnostics & Terraform input converter
 ├── container/           # OCI container runtime client (bollard, Docker/Podman)
 ├── overrides/           # Local override configuration
@@ -479,8 +449,7 @@ src/
 ├── orchestrator/        # Container lifecycle & dependsOn DAG
 ├── metadata/            # ECS metadata endpoint mock (axum HTTP server)
 ├── credentials/         # AWS credential provider (aws-config)
-├── events/              # Structured lifecycle event logging (NDJSON)
-└── history/             # Execution history persistence
+└── events/              # Structured lifecycle event logging (NDJSON)
 ```
 
 ### Key Dependencies

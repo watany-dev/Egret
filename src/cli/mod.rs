@@ -1,9 +1,7 @@
 //! CLI command definitions and argument parsing.
 
 pub mod completions;
-pub mod diff;
 pub mod format;
-pub mod history;
 pub mod init;
 pub mod inspect;
 pub mod logs;
@@ -49,14 +47,10 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Show live resource usage statistics
     Stats(StatsArgs),
-    /// Show execution history
-    History(HistoryArgs),
     /// Show version information
     Version,
     /// Generate shell completion scripts
     Completions(CompletionsArgs),
-    /// Compare two task definition files semantically
-    Diff(DiffArgs),
     /// Watch files and auto-restart on changes
     Watch(WatchArgs),
 }
@@ -65,17 +59,6 @@ pub enum Command {
 pub struct CompletionsArgs {
     /// Shell type (bash, zsh, fish)
     pub shell: clap_complete::Shell,
-}
-
-#[derive(Parser)]
-pub struct DiffArgs {
-    /// First task definition file
-    pub file1: PathBuf,
-    /// Second task definition file
-    pub file2: PathBuf,
-    /// Disable colored output
-    #[arg(long)]
-    pub no_color: bool,
 }
 
 #[derive(Parser)]
@@ -132,13 +115,6 @@ pub struct WatchArgs {
     /// Additional paths to watch for changes (repeatable)
     #[arg(long = "watch-path")]
     pub watch_paths: Vec<PathBuf>,
-}
-
-#[derive(Parser)]
-pub struct HistoryArgs {
-    /// Clear all history
-    #[arg(long)]
-    pub clear: bool,
 }
 
 #[derive(Parser)]
@@ -591,53 +567,6 @@ mod tests {
                 assert_eq!(args.family.as_deref(), Some("my-app"));
             }
             _ => panic!("expected Stats command"),
-        }
-    }
-
-    #[test]
-    fn parse_history_command() {
-        let cli = Cli::try_parse_from(["lecs", "history"]).expect("should parse");
-        match cli.command {
-            Command::History(args) => {
-                assert!(!args.clear);
-            }
-            _ => panic!("expected History command"),
-        }
-    }
-
-    #[test]
-    fn parse_history_with_clear() {
-        let cli = Cli::try_parse_from(["lecs", "history", "--clear"]).expect("should parse");
-        match cli.command {
-            Command::History(args) => {
-                assert!(args.clear);
-            }
-            _ => panic!("expected History command"),
-        }
-    }
-
-    #[test]
-    fn parse_diff_command() {
-        let cli = Cli::try_parse_from(["lecs", "diff", "a.json", "b.json"]).expect("should parse");
-        match cli.command {
-            Command::Diff(args) => {
-                assert_eq!(args.file1.to_str(), Some("a.json"));
-                assert_eq!(args.file2.to_str(), Some("b.json"));
-                assert!(!args.no_color);
-            }
-            _ => panic!("expected Diff command"),
-        }
-    }
-
-    #[test]
-    fn parse_diff_with_no_color() {
-        let cli = Cli::try_parse_from(["lecs", "diff", "--no-color", "a.json", "b.json"])
-            .expect("should parse");
-        match cli.command {
-            Command::Diff(args) => {
-                assert!(args.no_color);
-            }
-            _ => panic!("expected Diff command"),
         }
     }
 
