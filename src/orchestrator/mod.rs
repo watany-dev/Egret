@@ -28,6 +28,7 @@ pub enum OrchestratorError {
 }
 
 /// Lightweight dependency information for DAG resolution.
+#[derive(Debug, Clone)]
 pub struct DependencyInfo {
     pub name: String,
     pub depends_on: Vec<DependsOn>,
@@ -893,6 +894,246 @@ mod tests {
     fn format_cycle_path_short_input() {
         assert_eq!(format_cycle_path(&[]), "unknown cycle");
         assert_eq!(format_cycle_path(&["a"]), "unknown cycle");
+    }
+
+    // --- Property-based tests for DAG resolution ---
+
+    mod pbt {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::{HashMap, HashSet};
+
+        /// Generate a list of unique container names (`1..=max_nodes`).
+        fn arb_container_names(max_nodes: usize) -> impl Strategy<Value = Vec<String>> {
+            (1..=max_nodes).prop_flat_map(|n| {
+                proptest::collection::vec("[a-z][a-z0-9]{0,7}", n..=n).prop_map(|names| {
+                    // Deduplicate
+                    let mut seen = HashSet::new();
+                    let mut unique = Vec::new();
+                    for (i, name) in names.into_iter().enumerate() {
+                        let candidate = if seen.contains(&name) {
+                            format!("{name}{i}")
+                        } else {
+                            name
+                        };
+                        seen.insert(candidate.clone());
+                        unique.push(candidate);
+                    }
+                    unique
+                })
+            })
+        }
+
+        /// Generate a valid DAG (no cycles): for each node, only depend on nodes
+        /// with a smaller index (guarantees topological ordering).
+        fn arb_dag(max_nodes: usize) -> impl Strategy<Value = Vec<DependencyInfo>> {
+            arb_container_names(max_nodes).prop_flat_map(|names| {
+                let n = names.len();
+                let deps_strategies: Vec<_> = (0..n)
+                    .map(|i| {
+                        if i == 0 {
+                            // First node cannot depend on anything
+                            Just(vec![]).boxed()
+                        } else {
+                            // Depend on a subset of earlier nodes (0 to min(i, 3) deps)
+                            let max_deps = i.min(3);
+                            proptest::collection::vec(0..i, 0..=max_deps)
+                                .prop_map(|indices| {
+                                    let mut seen = HashSet::new();
+                                    indices
+                                        .into_iter()
+                                        .filter(|idx| seen.insert(*idx))
+                                        .collect::<Vec<_>>()
+                                })
+                                .boxed()
+                        }
+                    })
+                    .collect();
+
+                (Just(names), deps_strategies).prop_map(|(names, dep_indices_vec)| {
+                    names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, name)| DependencyInfo {
+                            name: name.clone(),
+                            depends_on: dep_indices_vec[i]
+                                .iter()
+                                .map(|&idx| DependsOn {
+                                    container_name: names[idx].clone(),
+                                    condition: DependencyCondition::Start,
+                                })
+                                .collect(),
+                        })
+                        .collect()
+                })
+            })
+        }
+
+        /// Generate a dependency graph that contains at least one cycle.
+        fn arb_cyclic_graph() -> impl Strategy<Value = Vec<DependencyInfo>> {
+            arb_container_names(6).prop_flat_map(|names| {
+                let n = names.len();
+                if n < 2 {
+                    // Need at least 2 nodes for a cycle
+                    return Just(vec![
+                        DependencyInfo {
+                            name: "cyc_a".into(),
+                            depends_on: vec![DependsOn {
+                                container_name: "cyc_b".into(),
+                                condition: DependencyCondition::Start,
+                            }],
+                        },
+                        DependencyInfo {
+                            name: "cyc_b".into(),
+                            depends_on: vec![DependsOn {
+                                container_name: "cyc_a".into(),
+                                condition: DependencyCondition::Start,
+                            }],
+                        },
+                    ])
+                    .boxed();
+                }
+
+                // Pick a cycle length (2..=n), then create a cycle among
+                // the first `cycle_len` nodes and leave the rest independent.
+                (2..=n)
+                    .prop_flat_map(move |cycle_len| {
+                        let names = names.clone();
+                        Just(
+                            names
+                                .iter()
+                                .enumerate()
+                                .map(|(i, name)| {
+                                    if i < cycle_len {
+                                        let dep_idx = (i + 1) % cycle_len;
+                                        DependencyInfo {
+                                            name: name.clone(),
+                                            depends_on: vec![DependsOn {
+                                                container_name: names[dep_idx].clone(),
+                                                condition: DependencyCondition::Start,
+                                            }],
+                                        }
+                                    } else {
+                                        DependencyInfo {
+                                            name: name.clone(),
+                                            depends_on: vec![],
+                                        }
+                                    }
+                                })
+                                .collect(),
+                        )
+                    })
+                    .boxed()
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            /// Property: A valid DAG always produces a successful result.
+            #[test]
+            fn dag_always_resolves(deps in arb_dag(8)) {
+                let result = resolve_start_order(&deps);
+                prop_assert!(result.is_ok(), "DAG should resolve but got: {:?}", result.err());
+            }
+
+            /// Property: All nodes appear in exactly one layer.
+            #[test]
+            fn all_nodes_in_exactly_one_layer(deps in arb_dag(8)) {
+                let layers = resolve_start_order(&deps).expect("should resolve");
+                let all_names: Vec<&str> = layers.iter().flat_map(|l| l.iter().map(String::as_str)).collect();
+                let unique: HashSet<&str> = all_names.iter().copied().collect();
+
+                // No duplicates
+                prop_assert_eq!(all_names.len(), unique.len(), "duplicate nodes in layers");
+
+                // All input nodes present
+                for d in &deps {
+                    prop_assert!(unique.contains(d.name.as_str()), "missing node: {}", d.name);
+                }
+            }
+
+            /// Property: Dependencies are satisfied — every node appears in a
+            /// layer after all its dependencies.
+            #[test]
+            fn dependencies_precede_dependents(deps in arb_dag(8)) {
+                let layers = resolve_start_order(&deps).expect("should resolve");
+
+                // Build name -> layer index map
+                let mut layer_of: HashMap<&str, usize> = HashMap::new();
+                for (li, layer) in layers.iter().enumerate() {
+                    for name in layer {
+                        layer_of.insert(name.as_str(), li);
+                    }
+                }
+
+                for d in &deps {
+                    let my_layer = layer_of[d.name.as_str()];
+                    for dep in &d.depends_on {
+                        if let Some(&dep_layer) = layer_of.get(dep.container_name.as_str()) {
+                            prop_assert!(
+                                dep_layer < my_layer,
+                                "container '{}' (layer {}) depends on '{}' (layer {}), but dependency is not in an earlier layer",
+                                d.name, my_layer, dep.container_name, dep_layer
+                            );
+                        }
+                    }
+                }
+            }
+
+            /// Property: Nodes within the same layer have no mutual dependencies.
+            #[test]
+            fn same_layer_nodes_are_independent(deps in arb_dag(8)) {
+                let layers = resolve_start_order(&deps).expect("should resolve");
+                let dep_map: HashMap<&str, HashSet<&str>> = deps.iter().map(|d| {
+                    (d.name.as_str(), d.depends_on.iter().map(|dep| dep.container_name.as_str()).collect())
+                }).collect();
+
+                for layer in &layers {
+                    let layer_set: HashSet<&str> = layer.iter().map(String::as_str).collect();
+                    for name in layer {
+                        if let Some(my_deps) = dep_map.get(name.as_str()) {
+                            for dep_name in my_deps {
+                                prop_assert!(
+                                    !layer_set.contains(dep_name),
+                                    "'{}' and its dependency '{}' are in the same layer",
+                                    name, dep_name
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            /// Property: Each layer is sorted (deterministic output).
+            #[test]
+            fn layers_are_sorted(deps in arb_dag(8)) {
+                let layers = resolve_start_order(&deps).expect("should resolve");
+                for layer in &layers {
+                    let mut sorted = layer.clone();
+                    sorted.sort();
+                    prop_assert_eq!(layer, &sorted, "layer should be sorted");
+                }
+            }
+
+            /// Property: A graph with a cycle always returns CyclicDependency error.
+            #[test]
+            fn cyclic_graph_always_fails(deps in arb_cyclic_graph()) {
+                let result = resolve_start_order(&deps);
+                prop_assert!(
+                    matches!(result, Err(OrchestratorError::CyclicDependency(_))),
+                    "cyclic graph should fail with CyclicDependency, got: {:?}",
+                    result
+                );
+            }
+
+            /// Property: Empty input produces empty output.
+            #[test]
+            fn empty_input_empty_output(_seed in 0u32..100u32) {
+                let result = resolve_start_order(&[]).expect("empty should resolve");
+                prop_assert!(result.is_empty());
+            }
+        }
     }
 
     fn make_inspection(id: &str, health_status: Option<&str>) -> ContainerInspection {

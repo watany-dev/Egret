@@ -1097,6 +1097,264 @@ mod tests {
 
     // --- validate_extended integration with all checks ---
 
+    // --- Property-based tests ---
+
+    mod pbt {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Generate a valid Docker image name: alphanumeric start, no whitespace,
+        /// no leading/trailing `/` or `:`, no `//` or `::`.
+        fn arb_valid_image() -> impl Strategy<Value = String> {
+            // registry/name:tag pattern
+            (
+                "[a-z0-9][a-z0-9.-]{0,15}",                         // registry or name
+                proptest::option::of("/[a-z0-9][a-z0-9.-]{0,10}"),  // optional path
+                proptest::option::of(":[a-z0-9][a-z0-9._-]{0,15}"), // optional tag
+            )
+                .prop_map(|(name, path, tag)| {
+                    let mut image = name;
+                    if let Some(p) = path {
+                        image.push_str(&p);
+                    }
+                    if let Some(t) = tag {
+                        image.push_str(&t);
+                    }
+                    image
+                })
+        }
+
+        /// Build a minimal valid `TaskDefinition` with given containers.
+        #[allow(clippy::type_complexity)]
+        fn make_task_def_with_containers(
+            containers: Vec<(String, String, Vec<(u16, Option<u16>, String)>)>,
+        ) -> TaskDefinition {
+            use crate::taskdef::*;
+            TaskDefinition {
+                family: "test".into(),
+                task_role_arn: None,
+                execution_role_arn: None,
+                volumes: vec![],
+                container_definitions: containers
+                    .into_iter()
+                    .map(|(name, image, ports)| ContainerDefinition {
+                        name,
+                        image,
+                        port_mappings: ports
+                            .into_iter()
+                            .map(|(cp, hp, proto)| PortMapping {
+                                container_port: cp,
+                                host_port: hp,
+                                protocol: proto,
+                            })
+                            .collect(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(300))]
+
+            /// Property: Valid image names produce no diagnostics.
+            #[test]
+            fn valid_image_no_diagnostic(image in arb_valid_image()) {
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_none(), "valid image '{}' should not produce diagnostic: {:?}", image, result);
+            }
+
+            /// Property: Images with whitespace always produce an error.
+            #[test]
+            fn image_with_whitespace_is_error(
+                prefix in "[a-z]{1,5}",
+                ws in "[ \t\n\r]",
+                suffix in "[a-z]{1,5}",
+            ) {
+                let image = format!("{prefix}{ws}{suffix}");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' with whitespace should be rejected", image);
+                prop_assert_eq!(result.as_ref().map(|d| d.severity), Some(Severity::Error));
+            }
+
+            /// Property: Empty image always produces an error.
+            #[test]
+            fn empty_image_is_error(_seed in 0u32..10u32) {
+                let result = check_image_format("", "test");
+                prop_assert!(result.is_some());
+                prop_assert_eq!(result.as_ref().map(|d| d.severity), Some(Severity::Error));
+            }
+
+            /// Property: Images starting with '/' always produce an error.
+            #[test]
+            fn leading_slash_is_error(rest in "[a-z0-9]{1,10}") {
+                let image = format!("/{rest}");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' should be rejected", image);
+            }
+
+            /// Property: Images ending with '/' always produce an error.
+            #[test]
+            fn trailing_slash_is_error(prefix in "[a-z0-9]{1,10}") {
+                let image = format!("{prefix}/");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' should be rejected", image);
+            }
+
+            /// Property: Images starting with ':' always produce an error.
+            #[test]
+            fn leading_colon_is_error(rest in "[a-z0-9]{1,10}") {
+                let image = format!(":{rest}");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' should be rejected", image);
+            }
+
+            /// Property: Images ending with ':' always produce an error.
+            #[test]
+            fn trailing_colon_is_error(prefix in "[a-z0-9]{1,10}") {
+                let image = format!("{prefix}:");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' should be rejected", image);
+            }
+
+            /// Property: Images containing '//' always produce an error.
+            #[test]
+            fn double_slash_is_error(
+                prefix in "[a-z0-9]{1,5}",
+                suffix in "[a-z0-9]{1,5}",
+            ) {
+                let image = format!("{prefix}//{suffix}");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' should be rejected", image);
+            }
+
+            /// Property: Images containing '::' always produce an error.
+            #[test]
+            fn double_colon_is_error(
+                prefix in "[a-z0-9]{1,5}",
+                suffix in "[a-z0-9]{1,5}",
+            ) {
+                let image = format!("{prefix}::{suffix}");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' should be rejected", image);
+            }
+
+            /// Property: Images not starting with alphanumeric always produce an error.
+            #[test]
+            fn non_alphanumeric_start_is_error(
+                first in "[^a-zA-Z0-9/ :\t\n\r]",
+                rest in "[a-z0-9]{0,10}",
+            ) {
+                let image = format!("{first}{rest}");
+                let result = check_image_format(&image, "test");
+                prop_assert!(result.is_some(), "image '{}' starting with non-alphanumeric should be rejected", image);
+            }
+
+            /// Property: All diagnostics from check_image_format are Error severity.
+            #[test]
+            fn image_diagnostics_are_always_errors(image in "\\PC{1,30}") {
+                if let Some(d) = check_image_format(&image, "test") {
+                    prop_assert_eq!(d.severity, Severity::Error, "image format diagnostics should always be Error");
+                }
+            }
+
+            /// Property: Port conflicts are commutative — if we swap container order,
+            /// we still detect the same number of conflicts.
+            #[test]
+            fn port_conflict_count_independent_of_order(
+                port in 1u16..65535u16,
+                proto in prop_oneof![Just("tcp".to_string()), Just("udp".to_string())],
+            ) {
+                let td1 = make_task_def_with_containers(vec![
+                    ("a".into(), "alpine:latest".into(), vec![(port, Some(port), proto.clone())]),
+                    ("b".into(), "alpine:latest".into(), vec![(port, Some(port), proto.clone())]),
+                ]);
+                let td2 = make_task_def_with_containers(vec![
+                    ("b".into(), "alpine:latest".into(), vec![(port, Some(port), proto.clone())]),
+                    ("a".into(), "alpine:latest".into(), vec![(port, Some(port), proto)]),
+                ]);
+
+                let c1 = check_port_conflicts(&td1).len();
+                let c2 = check_port_conflicts(&td2).len();
+                prop_assert_eq!(c1, c2, "port conflict count should be order-independent");
+            }
+
+            /// Property: Distinct host ports never produce conflicts.
+            #[test]
+            fn distinct_ports_no_conflict(
+                port1 in 1u16..32000u16,
+                port2 in 32001u16..65535u16,
+            ) {
+                let td = make_task_def_with_containers(vec![
+                    ("a".into(), "alpine:latest".into(), vec![(80, Some(port1), "tcp".into())]),
+                    ("b".into(), "alpine:latest".into(), vec![(80, Some(port2), "tcp".into())]),
+                ]);
+                prop_assert!(check_port_conflicts(&td).is_empty());
+            }
+
+            /// Property: Same host port but different protocols don't conflict.
+            #[test]
+            fn same_port_different_protocol_no_conflict(port in 1u16..65535u16) {
+                let td = make_task_def_with_containers(vec![
+                    ("a".into(), "alpine:latest".into(), vec![(80, Some(port), "tcp".into())]),
+                    ("b".into(), "alpine:latest".into(), vec![(80, Some(port), "udp".into())]),
+                ]);
+                prop_assert!(check_port_conflicts(&td).is_empty());
+            }
+
+            /// Property: Valid ARNs produce no warnings.
+            #[test]
+            fn valid_secret_arn_no_warning(
+                region in "(us|eu|ap)-(east|west|central)-[1-3]",
+                account in "[0-9]{12}",
+                name in "[a-zA-Z][a-zA-Z0-9_-]{0,20}",
+            ) {
+                let arn = format!("arn:aws:secretsmanager:{region}:{account}:secret:{name}");
+                let td = TaskDefinition {
+                    family: "test".into(),
+                    task_role_arn: None,
+                    execution_role_arn: None,
+                    volumes: vec![],
+                    container_definitions: vec![crate::taskdef::ContainerDefinition {
+                        name: "app".into(),
+                        image: "alpine:latest".into(),
+                        secrets: vec![crate::taskdef::Secret {
+                            name: "SECRET".into(),
+                            value_from: arn,
+                        }],
+                        ..Default::default()
+                    }],
+                };
+                let diags = check_secret_arn_format(&td);
+                prop_assert!(diags.is_empty(), "valid ARN should produce no warnings: {:?}", diags);
+            }
+
+            /// Property: validate_extended never panics on arbitrary valid task definitions.
+            #[test]
+            fn validate_extended_never_panics(
+                family in "[a-zA-Z][a-zA-Z0-9_-]{0,10}",
+                n_containers in 1usize..=5usize,
+            ) {
+                let containers: Vec<_> = (0..n_containers)
+                    .map(|i| crate::taskdef::ContainerDefinition {
+                        name: format!("c{i}"),
+                        image: "alpine:latest".into(),
+                        ..Default::default()
+                    })
+                    .collect();
+                let td = TaskDefinition {
+                    family,
+                    task_role_arn: None,
+                    execution_role_arn: None,
+                    volumes: vec![],
+                    container_definitions: containers,
+                };
+                // Should not panic
+                let _report = validate_extended(&td);
+            }
+        }
+    }
+
     #[test]
     fn validate_extended_collects_all_issues() {
         let td = make_task_def(
