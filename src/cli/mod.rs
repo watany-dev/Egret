@@ -10,6 +10,7 @@ pub mod ps;
 pub mod run;
 pub mod stats;
 pub mod stop;
+pub mod task_lifecycle;
 pub mod validate;
 pub mod version;
 pub mod watch;

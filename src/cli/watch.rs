@@ -154,7 +154,7 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
                 if let Some(server) = state.metadata_server.take() {
                     server.shutdown().await;
                 }
-                super::run::cleanup(
+                super::task_lifecycle::cleanup(
                     &*client,
                     &state.containers,
                     &state.network,
@@ -179,7 +179,7 @@ pub async fn execute(args: &WatchArgs, host: Option<&str>) -> Result<()> {
     if let Some(server) = state.metadata_server.take() {
         server.shutdown().await;
     }
-    super::run::cleanup(
+    super::task_lifecycle::cleanup(
         &*client,
         &state.containers,
         &state.network,
@@ -212,7 +212,7 @@ async fn load_and_run_task(
     let (metadata_server, metadata_state) = if args.no_metadata {
         (None, None)
     } else {
-        match super::run::start_metadata_server(&task_def).await {
+        match super::task_lifecycle::start_metadata_server(&task_def).await {
             Ok((server, state)) => (Some(server), Some(state)),
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to start metadata server, continuing without it");
@@ -229,7 +229,7 @@ async fn load_and_run_task(
     };
 
     let family = task_def.family.clone();
-    let (network, containers) = super::run::run_task(
+    let (network, containers) = super::task_lifecycle::run_task(
         client,
         &task_def,
         metadata_port,
