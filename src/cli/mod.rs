@@ -960,6 +960,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_exec_no_command() {
+        let cli = Cli::try_parse_from(["lecs", "exec", "app"]).expect("should parse");
+        match cli.command {
+            Command::Exec(args) => {
+                assert_eq!(args.container, "app");
+                assert!(args.command.is_empty());
+            }
+            _ => panic!("expected Exec command"),
+        }
+    }
+
+    #[test]
+    fn parse_exec_with_double_dash() {
+        let cli =
+            Cli::try_parse_from(["lecs", "exec", "app", "--", "ls", "-la"]).expect("should parse");
+        match cli.command {
+            Command::Exec(args) => {
+                assert_eq!(args.container, "app");
+                assert_eq!(args.command, vec!["ls", "-la"]);
+            }
+            _ => panic!("expected Exec command"),
+        }
+    }
+
+    #[test]
+    fn parse_exec_hyphen_args_require_double_dash() {
+        // -la is interpreted as a flag without --, so this should fail
+        let result = Cli::try_parse_from(["lecs", "exec", "app", "-la"]);
+        assert!(result.is_err(), "hyphen-prefixed args need -- separator");
+    }
+
+    #[test]
     fn parse_watch_with_from_cfn() {
         let cli = Cli::try_parse_from(["lecs", "watch", "--from-cfn", "template.json"])
             .expect("should parse");

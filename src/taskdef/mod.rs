@@ -411,7 +411,8 @@ pub struct TmpfsMount {
 ///
 /// Each file is read line by line. Lines starting with `#` are comments,
 /// empty lines are skipped, and lines without `=` are ignored.
-/// Returns key-value pairs in insertion order; later files override earlier ones.
+/// Returns key-value pairs in insertion order (earlier files first, then later ones).
+/// Duplicate keys are preserved; the caller is responsible for last-wins semantics.
 pub fn load_environment_files(
     files: &[EnvironmentFile],
     base_dir: &Path,
