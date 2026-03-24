@@ -151,6 +151,10 @@ pub struct ContainerDefinition {
     /// Working directory inside the container.
     #[serde(default)]
     pub working_directory: Option<String>,
+
+    /// User to run the container as (e.g., "uid", "uid:gid", "username").
+    #[serde(default)]
+    pub user: Option<String>,
 }
 
 impl Default for ContainerDefinition {
@@ -172,6 +176,7 @@ impl Default for ContainerDefinition {
             mount_points: Vec::new(),
             docker_labels: HashMap::new(),
             working_directory: None,
+            user: None,
         }
     }
 }
@@ -1627,5 +1632,33 @@ mod tests {
             matches!(err, TaskDefError::Validation(ref msg) if msg.contains("path traversal")),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_user_field() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "user": "1000:1000"
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].user.as_deref(), Some("1000:1000"));
+    }
+
+    #[test]
+    fn parse_user_field_defaults_to_none() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].user.is_none());
     }
 }

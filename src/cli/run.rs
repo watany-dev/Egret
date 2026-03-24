@@ -454,6 +454,7 @@ fn build_container_config(
         health_check,
         binds,
         working_dir: def.working_directory.clone(),
+        user: def.user.clone(),
     }
 }
 
@@ -533,6 +534,10 @@ fn format_container_dry_run(
 
     if let Some(wd) = &container.working_directory {
         let _ = writeln!(output, "  Working directory: {wd}");
+    }
+
+    if let Some(user) = &container.user {
+        let _ = writeln!(output, "  User: {user}");
     }
 
     if !container.docker_labels.is_empty() {

@@ -89,6 +89,8 @@ pub struct ContainerConfig {
     pub binds: Vec<String>,
     /// Working directory inside the container.
     pub working_dir: Option<String>,
+    /// User to run the container as.
+    pub user: Option<String>,
 }
 
 impl Default for ContainerConfig {
@@ -107,6 +109,7 @@ impl Default for ContainerConfig {
             health_check: None,
             binds: Vec::new(),
             working_dir: None,
+            user: None,
         }
     }
 }
@@ -770,6 +773,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         labels: Some(config.labels.clone()),
         healthcheck,
         working_dir: config.working_dir.clone(),
+        user: config.user.clone(),
         ..Default::default()
     }
 }
@@ -980,6 +984,21 @@ mod tests {
         let config = sample_config();
         let result = build_bollard_config(&config);
         assert!(result.working_dir.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_with_user() {
+        let mut config = sample_config();
+        config.user = Some("1000:1000".to_string());
+        let result = build_bollard_config(&config);
+        assert_eq!(result.user.as_deref(), Some("1000:1000"));
+    }
+
+    #[test]
+    fn build_bollard_config_without_user() {
+        let config = sample_config();
+        let result = build_bollard_config(&config);
+        assert!(result.user.is_none());
     }
 
     #[test]
