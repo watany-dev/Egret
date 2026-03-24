@@ -1352,6 +1352,58 @@ mod tests {
     }
 
     #[test]
+    fn build_container_config_resource_fields_passthrough() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            cpu: Some(256),
+            memory: Some(512),
+            memory_reservation: Some(256),
+            working_directory: Some("/app".to_string()),
+            user: Some("1000:1000".to_string()),
+            stop_timeout: Some(60),
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+
+        assert_eq!(config.cpu_units, Some(256));
+        assert_eq!(config.memory_mib, Some(512));
+        assert_eq!(config.memory_reservation_mib, Some(256));
+        assert_eq!(config.working_dir.as_deref(), Some("/app"));
+        assert_eq!(config.user.as_deref(), Some("1000:1000"));
+        assert_eq!(config.labels.get("lecs.stop_timeout").unwrap(), "60");
+    }
+
+    #[test]
+    fn format_container_dry_run_with_new_fields() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            working_directory: Some("/app/work".to_string()),
+            user: Some("nobody".to_string()),
+            stop_timeout: Some(45),
+            cpu: Some(512),
+            memory: Some(1024),
+            memory_reservation: Some(256),
+            docker_labels: HashMap::from([("com.example.version".into(), "1.0".into())]),
+            ..Default::default()
+        };
+
+        let output = format_container_dry_run("test", &def, &HashSet::new());
+
+        assert!(output.contains("Working directory: /app/work"));
+        assert!(output.contains("User: nobody"));
+        assert!(output.contains("Stop timeout: 45s"));
+        assert!(output.contains("Resources:"));
+        assert!(output.contains("CPU: 512 units"));
+        assert!(output.contains("Memory: 1024 MiB (hard limit)"));
+        assert!(output.contains("Memory reservation: 256 MiB (soft limit)"));
+        assert!(output.contains("Docker labels:"));
+        assert!(output.contains("com.example.version=1.0"));
+    }
+
+    #[test]
     fn parse_run_with_dry_run_flag() {
         let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--dry-run"])
             .expect("should parse");
