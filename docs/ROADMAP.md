@@ -192,6 +192,10 @@ src/
 - [x] 二重デシリアライゼーション — `container_definitions` JSON 文字列の変換
 - [x] Volume 変換 — Terraform の `volume`（snake_case）を Lecs の `volumes`（camelCase）に変換
 - [x] 対応コマンド: `lecs run`, `lecs validate`, `lecs watch`
+- [x] `--from-cfn` フラグ — CloudFormation テンプレート JSON を直接入力（CDK synth 出力含む）
+  - PascalCase → camelCase キー変換による既存型との互換性確保
+  - Intrinsic Function（`Ref`, `Fn::Sub` 等）の検出・エラー報告
+- [x] `--cfn-resource` フラグ — 複数 ECS リソースから1つを論理IDで選択
 
 ### Phase 10: タスク定義フィールド完全対応 ✅
 **目標**: パース済みフィールドの実適用 + 高重要度フィールドの追加
@@ -238,10 +242,10 @@ src/
   - `RestartPolicy` enum（`None` / `OnFailure` / `Always`）+ 指数バックオフ（1s → 2s → ... → 300s）
   - essential コンテナ終了時の再起動判定ロジック
 - [ ] `lecs run --service` フラグ
-  - reconciliation ループ有効化、Ctrl+C まで常時稼働
+  - サービスモードループ有効化、Ctrl+C まで常時稼働
 - [ ] クレデンシャルローテーション
   - `tokio::spawn` でバックグラウンドリフレッシュ
-  - `AppState` 内の credentials を `RwLock` で保護、TTL/2 間隔で更新
+  - `SharedState` 内の credentials を `RwLock` で保護、TTL/2 間隔で更新
 
 ---
 
@@ -271,46 +275,11 @@ Phase 0-2.5: ✅ 完了
     │               │
     │               └── Phase 9 (Terraform 互換性) ✅
     │                       │
-    │                       ├── Phase 10 (タスク定義フィールド完全対応)
+    │                       ├── Phase 10 (タスク定義フィールド完全対応) ✅
     │                       │       │
-    │                       │       └── Phase 11 (ECS Exec + 環境変数拡張)
+    │                       │       └── Phase 11 (ECS Exec + 環境変数拡張) ✅
     │                       │
     │                       └── Phase 12 (サービスモード MVP)
-```
-
-### Phase 10: CloudFormation / CDK 互換性
-**目標**: CloudFormation テンプレート（CDK synth 出力含む）から直接タスク定義を読み込めるようにする
-
-- [x] `--from-cfn` フラグ — CloudFormation テンプレート JSON を直接入力
-  - PascalCase → camelCase キー変換による既存型との互換性確保
-  - Intrinsic Function（`Ref`, `Fn::Sub` 等）の検出・エラー報告
-- [x] `--cfn-resource` フラグ — 複数 ECS リソースから1つを論理IDで選択
-- [x] 対応コマンド: `lecs run`, `lecs validate`, `lecs watch`
-- [ ] YAML テンプレート対応（将来対応）
-- [ ] `--from-cdk` による `cdk.out/` ディレクトリ自動探索（将来対応）
-
----
-
-## 実装順序とPhase間の依存関係
-
-```
-Phase 0-2.5: ✅ 完了
-    │
-    ├── Phase 3 (Metadata + Credentials) ✅
-    │       │
-    ├── Phase 4 (dependsOn + Health Check) ✅
-    │       │
-    ├── Phase 5 (Volumes + Logs + ps) ✅
-    │       │
-    ├── Phase 6 (Validate/Init/Dry-run) ✅
-    │       │
-    │       ├── Phase 7 (可観測性) ✅
-    │       │
-    │       └── Phase 8 (ワークフロー高速化) ✅
-    │               │
-    │               ├── Phase 9 (Terraform 互換性) ✅
-    │               │
-    │               └── Phase 10 (CloudFormation / CDK 互換性)
 ```
 
 ---

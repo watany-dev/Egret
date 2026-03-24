@@ -214,11 +214,7 @@ if args.service {
 }
 ```
 
-6. **`--dry-run` のサービスモード表示**:
-   - `--service` 指定時、dry-run 出力にリスタートポリシー情報を追加
-   - ただし `conflicts_with = "dry_run"` のため実際には同時指定不可
-
-7. **テスト** (5-8テスト):
+6. **テスト** (5-8テスト):
    - CLI パース: `--service` の有無
    - CLI パース: `--service --dry-run` が排他エラー
    - `restart_container` のモックテスト（`MockContainerClient` 使用）
@@ -228,7 +224,7 @@ if args.service {
 - `run_task()` (`src/cli/task_lifecycle.rs:25`) — 初回起動
 - `cleanup()` (`src/cli/task_lifecycle.rs:126`) — 最終クリーンアップ
 - `build_container_config()` (`src/cli/task_lifecycle.rs:187`) — 再起動時のコンテナ設定構築
-- `watch_essential_exit()` (`src/orchestrator/mod.rs:418`) — essential コンテナ監視
+- `watch_essential_exit()` (`src/orchestrator/mod.rs:419`) — essential コンテナ監視
 - `metadata::update_container_id()` (`src/metadata/mod.rs:264`) — 再起動後の ID 更新
 
 ---
