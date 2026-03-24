@@ -4,15 +4,17 @@ use std::collections::HashMap;
 
 use bollard::Docker;
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, LogsOptions, RemoveContainerOptions,
-    StatsOptions, StopContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
+    RemoveContainerOptions, StatsOptions, StopContainerOptions,
 };
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{
     EndpointSettings, HealthConfig, HostConfig, PortBinding, ResourcesUlimits,
 };
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
 use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 
 /// Container runtime errors.
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +24,9 @@ pub enum ContainerError {
 
     #[error("Container runtime API error: {0}")]
     Api(#[from] bollard::errors::Error),
+
+    #[error("exec failed on container {container_id}: {detail}")]
+    ExecFailed { container_id: String, detail: String },
 }
 
 /// Abstraction over container runtime operations for testability.
@@ -69,6 +74,19 @@ pub trait ContainerRuntime: Send + Sync {
     /// Get a single snapshot of resource usage statistics for a container.
     #[allow(dead_code)]
     async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError>;
+
+    /// Execute a command inside a running container.
+    async fn exec_container(
+        &self,
+        id: &str,
+        cmd: &[String],
+    ) -> Result<ExecResult, ContainerError>;
+}
+
+/// Result of executing a command inside a container.
+pub struct ExecResult {
+    /// Exit code from the executed command (None if not available).
+    pub exit_code: Option<i64>,
 }
 
 /// Lecs container runtime client wrapping bollard.
@@ -654,6 +672,66 @@ impl ContainerRuntime for ContainerClient {
             block_write_bytes: block_write,
         })
     }
+
+    #[cfg(not(tarpaulin_include))]
+    #[allow(clippy::print_stdout, clippy::print_stderr)]
+    async fn exec_container(
+        &self,
+        id: &str,
+        cmd: &[String],
+    ) -> Result<ExecResult, ContainerError> {
+        let exec = self
+            .docker
+            .create_exec(
+                id,
+                CreateExecOptions::<String> {
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    cmd: Some(cmd.to_vec()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let start_result = self.docker.start_exec(&exec.id, None).await?;
+
+        match start_result {
+            StartExecResults::Attached { output, .. } => {
+                output
+                    .try_for_each(|log| async move {
+                        match log {
+                            LogOutput::StdOut { message } => {
+                                print!(
+                                    "{}",
+                                    String::from_utf8_lossy(&message)
+                                );
+                            }
+                            LogOutput::StdErr { message } => {
+                                eprint!(
+                                    "{}",
+                                    String::from_utf8_lossy(&message)
+                                );
+                            }
+                            LogOutput::Console { message } => {
+                                print!(
+                                    "{}",
+                                    String::from_utf8_lossy(&message)
+                                );
+                            }
+                            LogOutput::StdIn { .. } => {}
+                        }
+                        Ok(())
+                    })
+                    .await?;
+            }
+            StartExecResults::Detached => {}
+        }
+
+        let inspect = self.docker.inspect_exec(&exec.id).await?;
+        Ok(ExecResult {
+            exit_code: inspect.exit_code,
+        })
+    }
 }
 
 /// Calculate CPU usage percentage from a Docker stats snapshot.
@@ -843,6 +921,7 @@ pub mod test_support {
         pub inspect_container_results: Mutex<VecDeque<Result<ContainerInspection, ContainerError>>>,
         pub wait_container_results: Mutex<VecDeque<Result<WaitResult, ContainerError>>>,
         pub stats_container_results: Mutex<VecDeque<Result<ContainerStats, ContainerError>>>,
+        pub exec_container_results: Mutex<VecDeque<Result<ExecResult, ContainerError>>>,
     }
 
     impl MockContainerClient {
@@ -859,6 +938,7 @@ pub mod test_support {
                 inspect_container_results: Mutex::new(VecDeque::new()),
                 wait_container_results: Mutex::new(VecDeque::new()),
                 stats_container_results: Mutex::new(VecDeque::new()),
+                exec_container_results: Mutex::new(VecDeque::new()),
             }
         }
     }
@@ -934,6 +1014,14 @@ pub mod test_support {
 
         async fn stats_container(&self, _id: &str) -> Result<ContainerStats, ContainerError> {
             pop_result(&self.stats_container_results)
+        }
+
+        async fn exec_container(
+            &self,
+            _id: &str,
+            _cmd: &[String],
+        ) -> Result<ExecResult, ContainerError> {
+            pop_result(&self.exec_container_results)
         }
     }
 }

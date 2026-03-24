@@ -1,6 +1,7 @@
 //! CLI command definitions and argument parsing.
 
 pub mod completions;
+pub mod exec;
 pub mod format;
 pub mod init;
 pub mod inspect;
@@ -53,12 +54,23 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Watch files and auto-restart on changes
     Watch(WatchArgs),
+    /// Execute a command in a running container
+    Exec(ExecArgs),
 }
 
 #[derive(Parser)]
 pub struct CompletionsArgs {
     /// Shell type (bash, zsh, fish)
     pub shell: clap_complete::Shell,
+}
+
+#[derive(Parser)]
+pub struct ExecArgs {
+    /// Container name (exact or partial match)
+    pub container: String,
+    /// Command to execute (default: /bin/sh)
+    #[arg(last = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(Parser)]
