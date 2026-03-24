@@ -30,10 +30,10 @@ pub async fn execute(args: &ExecArgs, host: Option<&str>) -> Result<()> {
 
     let result = client.exec_container(&container.id, &cmd).await?;
 
-    if let Some(code) = result.exit_code {
-        if code != 0 {
-            std::process::exit(i32::try_from(code).unwrap_or(1));
-        }
+    if let Some(code) = result.exit_code
+        && code != 0
+    {
+        std::process::exit(i32::try_from(code).unwrap_or(1));
     }
 
     Ok(())
@@ -44,18 +44,21 @@ pub async fn execute(args: &ExecArgs, host: Option<&str>) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn resolve_command(command: &[String]) -> Vec<String> {
+        if command.is_empty() {
+            vec!["/bin/sh".to_string()]
+        } else {
+            command.to_vec()
+        }
+    }
+
     #[test]
     fn default_command_is_bin_sh() {
         let args = ExecArgs {
             container: "test".to_string(),
             command: vec![],
         };
-        let cmd = if args.command.is_empty() {
-            vec!["/bin/sh".to_string()]
-        } else {
-            args.command.clone()
-        };
-        assert_eq!(cmd, vec!["/bin/sh"]);
+        assert_eq!(resolve_command(&args.command), vec!["/bin/sh"]);
     }
 
     #[test]
@@ -64,11 +67,6 @@ mod tests {
             container: "test".to_string(),
             command: vec!["ls".to_string(), "-la".to_string()],
         };
-        let cmd = if args.command.is_empty() {
-            vec!["/bin/sh".to_string()]
-        } else {
-            args.command.clone()
-        };
-        assert_eq!(cmd, vec!["ls", "-la"]);
+        assert_eq!(resolve_command(&args.command), vec!["ls", "-la"]);
     }
 }

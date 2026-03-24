@@ -645,6 +645,15 @@ fn format_container_dry_run(
         }
     }
 
+    format_dry_run_extended_fields(&mut output, container);
+
+    output
+}
+
+/// Format extended task definition fields (environmentFiles, ulimits, linuxParameters) for dry-run.
+fn format_dry_run_extended_fields(output: &mut String, container: &ContainerDefinition) {
+    use std::fmt::Write;
+
     if !container.environment_files.is_empty() {
         output.push_str("  Environment files:\n");
         for ef in &container.environment_files {
@@ -678,8 +687,6 @@ fn format_container_dry_run(
             }
         }
     }
-
-    output
 }
 
 #[cfg(test)]

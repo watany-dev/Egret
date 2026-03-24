@@ -66,6 +66,7 @@ pub enum TaskDefError {
         source: std::io::Error,
     },
 
+    #[allow(dead_code)]
     #[error("invalid line in environment file {path} at line {line_number}: {detail}")]
     EnvironmentFileParse {
         path: PathBuf,
@@ -355,8 +356,10 @@ pub struct ExtraHost {
 pub struct EnvironmentFile {
     /// File path (S3 ARN in ECS; local path in Lecs).
     pub value: String,
-    /// File type — always "s3" in ECS. Lecs ignores this field.
+    /// File type — always "s3" in ECS. Lecs ignores this field but
+    /// preserves it for ECS task definition round-trip compatibility.
     #[serde(default = "default_env_file_type")]
+    #[allow(dead_code)]
     pub r#type: String,
 }
 

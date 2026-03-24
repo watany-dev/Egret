@@ -23,6 +23,7 @@ pub enum ContainerError {
     #[error("Container runtime API error: {0}")]
     Api(#[from] bollard::errors::Error),
 
+    #[allow(dead_code)]
     #[error("exec failed on container {container_id}: {detail}")]
     ExecFailed {
         container_id: String,
@@ -693,14 +694,11 @@ impl ContainerRuntime for ContainerClient {
                 output
                     .try_for_each(|log| async move {
                         match log {
-                            LogOutput::StdOut { message } => {
+                            LogOutput::StdOut { message } | LogOutput::Console { message } => {
                                 print!("{}", String::from_utf8_lossy(&message));
                             }
                             LogOutput::StdErr { message } => {
                                 eprint!("{}", String::from_utf8_lossy(&message));
-                            }
-                            LogOutput::Console { message } => {
-                                print!("{}", String::from_utf8_lossy(&message));
                             }
                             LogOutput::StdIn { .. } => {}
                         }
@@ -764,35 +762,11 @@ fn extract_inspect_ports(resp: &bollard::models::ContainerInspectResponse) -> Ve
         .unwrap_or_default()
 }
 
-/// Build a bollard container `Config` from an Lecs `ContainerConfig`.
-///
-/// Pure function — no container runtime interaction.
-#[allow(clippy::zero_sized_map_values)] // Container API requires HashMap for exposed_ports
-pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
-    let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
-    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
-
-    for pm in &config.port_mappings {
-        let container_key = format!("{}/{}", pm.container_port, pm.protocol);
-        exposed_ports.insert(container_key.clone(), HashMap::default());
-        port_bindings.insert(
-            container_key,
-            Some(vec![PortBinding {
-                host_ip: Some("127.0.0.1".to_string()),
-                host_port: Some(pm.host_port.to_string()),
-            }]),
-        );
-    }
-
-    let endpoint_settings = EndpointSettings {
-        aliases: Some(config.network_aliases.clone()),
-        ..Default::default()
-    };
-
-    let networking_config = bollard::container::NetworkingConfig {
-        endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
-    };
-
+/// Build the `HostConfig` portion of a bollard container config.
+fn build_host_config(
+    config: &ContainerConfig,
+    port_bindings: HashMap<String, Option<Vec<PortBinding>>>,
+) -> HostConfig {
     let extra_hosts = if config.extra_hosts.is_empty() {
         None
     } else {
@@ -805,7 +779,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         Some(config.binds.clone())
     };
 
-    let host_config = HostConfig {
+    HostConfig {
         port_bindings: Some(port_bindings),
         extra_hosts,
         binds,
@@ -839,7 +813,39 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
             Some(config.tmpfs.clone())
         },
         ..Default::default()
+    }
+}
+
+/// Build a bollard container `Config` from an Lecs `ContainerConfig`.
+///
+/// Pure function — no container runtime interaction.
+#[allow(clippy::zero_sized_map_values)] // Container API requires HashMap for exposed_ports
+pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
+    let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
+    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+
+    for pm in &config.port_mappings {
+        let container_key = format!("{}/{}", pm.container_port, pm.protocol);
+        exposed_ports.insert(container_key.clone(), HashMap::default());
+        port_bindings.insert(
+            container_key,
+            Some(vec![PortBinding {
+                host_ip: Some("127.0.0.1".to_string()),
+                host_port: Some(pm.host_port.to_string()),
+            }]),
+        );
+    }
+
+    let endpoint_settings = EndpointSettings {
+        aliases: Some(config.network_aliases.clone()),
+        ..Default::default()
     };
+
+    let networking_config = bollard::container::NetworkingConfig {
+        endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
+    };
+
+    let host_config = build_host_config(config, port_bindings);
 
     let cmd = if config.command.is_empty() {
         None
