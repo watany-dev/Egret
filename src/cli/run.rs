@@ -450,7 +450,18 @@ fn build_container_config(
         network: network.into(),
         network_aliases: vec![def.name.clone()],
         labels,
-        extra_hosts: vec!["host.docker.internal:host-gateway".to_string()],
+        extra_hosts: {
+            let mut hosts: Vec<String> = def
+                .extra_hosts
+                .iter()
+                .map(|h| format!("{}:{}", h.hostname, h.ip_address))
+                .collect();
+            // Add default host.docker.internal mapping unless user overrides it
+            if !hosts.iter().any(|h| h.starts_with("host.docker.internal:")) {
+                hosts.push("host.docker.internal:host-gateway".to_string());
+            }
+            hosts
+        },
         health_check,
         binds,
         working_dir: def.working_directory.clone(),
@@ -562,7 +573,8 @@ mod tests {
     use crate::cli::{Cli, Command};
     use crate::container::test_support::MockContainerClient;
     use crate::taskdef::{
-        ContainerDefinition, DependencyCondition, DependsOn, Environment, MountPoint, PortMapping,
+        ContainerDefinition, DependencyCondition, DependsOn, Environment, ExtraHost, MountPoint,
+        PortMapping,
         Volume, VolumeHost,
     };
 
@@ -824,6 +836,45 @@ mod tests {
         );
         // Lecs management labels take precedence over user labels
         assert_eq!(config.labels.get("lecs.managed").unwrap(), "true");
+    }
+
+    #[test]
+    fn build_container_config_extra_hosts_merged() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            extra_hosts: vec![ExtraHost {
+                hostname: "myhost".to_string(),
+                ip_address: "10.0.0.1".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        assert!(config.extra_hosts.contains(&"myhost:10.0.0.1".to_string()));
+        // Default host.docker.internal should still be present
+        assert!(config
+            .extra_hosts
+            .contains(&"host.docker.internal:host-gateway".to_string()));
+    }
+
+    #[test]
+    fn build_container_config_extra_hosts_user_overrides_default() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            extra_hosts: vec![ExtraHost {
+                hostname: "host.docker.internal".to_string(),
+                ip_address: "192.168.1.1".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        assert_eq!(
+            config.extra_hosts,
+            vec!["host.docker.internal:192.168.1.1"]
+        );
     }
 
     #[test]

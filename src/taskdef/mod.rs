@@ -155,6 +155,10 @@ pub struct ContainerDefinition {
     /// User to run the container as (e.g., "uid", "uid:gid", "username").
     #[serde(default)]
     pub user: Option<String>,
+
+    /// Extra host-to-IP mappings.
+    #[serde(default)]
+    pub extra_hosts: Vec<ExtraHost>,
 }
 
 impl Default for ContainerDefinition {
@@ -177,6 +181,7 @@ impl Default for ContainerDefinition {
             docker_labels: HashMap::new(),
             working_directory: None,
             user: None,
+            extra_hosts: Vec::new(),
         }
     }
 }
@@ -299,6 +304,16 @@ pub struct MountPoint {
     /// Mount as read-only (default: false).
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// Extra host-to-IP mapping (ECS extraHosts format).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraHost {
+    /// Hostname to map.
+    pub hostname: String,
+    /// IP address to map to.
+    pub ip_address: String,
 }
 
 const fn default_health_interval() -> u32 {
@@ -1660,5 +1675,37 @@ mod tests {
         }"#;
         let td = TaskDefinition::from_json(json).unwrap();
         assert!(td.container_definitions[0].user.is_none());
+    }
+
+    #[test]
+    fn parse_extra_hosts() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "extraHosts": [
+                        { "hostname": "myhost", "ipAddress": "10.0.0.1" }
+                    ]
+                }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.container_definitions[0].extra_hosts.len(), 1);
+        assert_eq!(td.container_definitions[0].extra_hosts[0].hostname, "myhost");
+        assert_eq!(td.container_definitions[0].extra_hosts[0].ip_address, "10.0.0.1");
+    }
+
+    #[test]
+    fn parse_extra_hosts_defaults_to_empty() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert!(td.container_definitions[0].extra_hosts.is_empty());
     }
 }
