@@ -28,7 +28,7 @@ cargo install cargo-deny
 
 ## Architecture
 
-- `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, inspect, stats, watch, completions, version
+- `src/cli/` — CLI commands (clap): run, stop, ps, logs, init, validate, inspect, stats, watch, exec, completions, version
 - `src/taskdef/` — ECS task definition JSON parser, types, validation diagnostics, Terraform input converter, and CloudFormation/CDK template converter
 - `src/container/` — OCI container runtime client (bollard, Docker/Podman)
 - `src/overrides/` — Local override configuration
@@ -38,6 +38,7 @@ cargo install cargo-deny
 - `src/metadata/` — ECS metadata endpoint mock (axum)
 - `src/credentials/` — Credential provider mock
 - `src/events/` — Structured lifecycle event logging (NDJSON)
+- `src/labels.rs` — Container label key constants (lecs.managed, lecs.task, etc.)
 
 ## Key Dependencies
 
@@ -46,10 +47,11 @@ cargo install cargo-deny
 - `tokio` — Async runtime
 - `serde`/`serde_json` — JSON handling
 - `axum` — HTTP server for metadata/credentials
-- `aws-config` — AWS credential chain loading
+- `aws-config`/`aws-credential-types` — AWS credential chain loading
 - `chrono` — Date/time handling
-- `tracing` — Structured logging
+- `tracing`/`tracing-subscriber` — Structured logging
 - `anyhow`/`thiserror` — Error handling
+- `futures-util` — Async stream processing for container logs
 - `toml` — Configuration file parsing (.lecs.toml)
 - `notify` — File system watching (lecs watch)
 - `getrandom` — CSPRNG for auth token generation

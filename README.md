@@ -51,8 +51,16 @@ lecs inspect my-app
 # Show resource usage (CPU, memory, I/O)
 lecs stats
 
+# Run from CloudFormation / CDK template
+lecs run --from-cfn template.json
+lecs run --from-cfn cdk.out/MyStack.template.json --cfn-resource MyTaskDef
+
 # Run with structured lifecycle events (NDJSON to stderr)
 lecs run -f task-definition.json --events
+
+# Execute a command in a running container
+lecs exec app -- /bin/bash
+lecs exec app  # defaults to /bin/sh
 
 # Stop a specific task
 lecs stop <family-name>
@@ -102,6 +110,8 @@ lecs run -f path/to/task-definition.json
 | `-f, --task-definition` | — | Path to ECS task definition JSON (required unless `--from-tf`) |
 | `--from-tf` | — | Path to `terraform show -json` output (alternative to `-f`) |
 | `--tf-resource` | — | Terraform resource address (when plan has multiple ECS task definitions) |
+| `--from-cfn` | — | Path to CloudFormation / CDK template JSON (alternative to `-f`) |
+| `--cfn-resource` | — | CloudFormation logical ID (when template has multiple ECS task definitions) |
 | `-o, --override` | — | Path to local override file (`lecs-override.json`) |
 | `-s, --secrets` | — | Path to local secrets mapping file (`secrets.local.json`) |
 | `-p, --profile` | — | Profile name for convention-based override/secrets resolution |
@@ -132,13 +142,16 @@ Performs static analysis of task definition files, detecting errors before runti
 lecs validate -f task-definition.json
 lecs validate -f task-definition.json --override lecs-override.json --secrets secrets.local.json
 lecs validate --from-tf plan.json
+lecs validate --from-cfn template.json
 ```
 
 | Flag | Description |
 |------|-------------|
-| `-f, --task-definition` | Path to ECS task definition JSON (required unless `--from-tf`) |
+| `-f, --task-definition` | Path to ECS task definition JSON (required unless `--from-tf` / `--from-cfn`) |
 | `--from-tf` | Path to `terraform show -json` output (alternative to `-f`) |
 | `--tf-resource` | Terraform resource address (when plan has multiple ECS task definitions) |
+| `--from-cfn` | Path to CloudFormation / CDK template JSON (alternative to `-f`) |
+| `--cfn-resource` | CloudFormation logical ID (when template has multiple ECS task definitions) |
 | `-o, --override` | Path to local override file |
 | `-s, --secrets` | Path to local secrets mapping file |
 | `-p, --profile` | Profile name for convention-based override/secrets resolution |
@@ -214,6 +227,21 @@ lecs logs app --follow
 |------|-------------|
 | `-f, --follow` | Follow log output (like `tail -f`) |
 
+### `lecs exec`
+
+Executes a command inside a running Lecs-managed container.
+
+```bash
+lecs exec app                   # opens /bin/sh (default)
+lecs exec app -- /bin/bash
+lecs exec app -- ls -la /tmp
+```
+
+| Argument | Description |
+|----------|-------------|
+| `<container>` | Container name (exact or partial match) |
+| `[-- command...]` | Command to execute (default: `/bin/sh`) |
+
 ### `lecs watch`
 
 Watches task definition and related files for changes and automatically restarts the task.
@@ -221,14 +249,17 @@ Watches task definition and related files for changes and automatically restarts
 ```bash
 lecs watch -f task-definition.json
 lecs watch --from-tf plan.json
+lecs watch --from-cfn template.json
 lecs watch -f task-definition.json --debounce 1000 --watch-path ./src
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-f, --task-definition` | — | Path to ECS task definition JSON (required unless `--from-tf`) |
+| `-f, --task-definition` | — | Path to ECS task definition JSON (required unless `--from-tf` / `--from-cfn`) |
 | `--from-tf` | — | Path to `terraform show -json` output (alternative to `-f`) |
 | `--tf-resource` | — | Terraform resource address |
+| `--from-cfn` | — | Path to CloudFormation / CDK template JSON |
+| `--cfn-resource` | — | CloudFormation logical ID |
 | `-o, --override` | — | Path to local override file |
 | `-s, --secrets` | — | Path to local secrets mapping file |
 | `-p, --profile` | — | Profile name |
@@ -329,6 +360,26 @@ lecs run --from-tf state.json
 ```
 
 Both plan output (`planned_values`) and state output (`values`) are supported. Child modules are searched recursively. The `container_definitions` JSON string inside Terraform output is automatically parsed (double deserialization).
+
+### CloudFormation / CDK Template Input
+
+Lecs can read CloudFormation template JSON (including CDK synth output) directly:
+
+```bash
+# Run from CloudFormation template
+lecs run --from-cfn template.json
+
+# Run from CDK synth output
+lecs run --from-cfn cdk.out/MyStack.template.json
+
+# When template has multiple ECS task definitions, specify the logical ID
+lecs run --from-cfn template.json --cfn-resource MyTaskDef
+
+# Validate from CloudFormation template
+lecs validate --from-cfn template.json
+```
+
+PascalCase property keys are automatically converted to camelCase. Intrinsic functions (`Ref`, `Fn::Sub`, etc.) are detected and reported as errors. Currently only JSON templates are supported (YAML support is planned).
 
 ### Configuration Profiles
 
@@ -440,8 +491,9 @@ The task definition's `taskRoleArn` and `executionRoleArn` fields are parsed and
 ```
 src/
 ├── main.rs              # Async entry point (clap + tokio)
-├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, watch, completions, version
-├── taskdef/             # ECS task definition JSON parser, validation diagnostics & Terraform input converter
+├── labels.rs            # Container label key constants (lecs.managed, lecs.task, ...)
+├── cli/                 # CLI commands: run, stop, ps, logs, init, validate, inspect, stats, watch, exec, completions, version
+├── taskdef/             # ECS task definition JSON parser, validation diagnostics, Terraform & CloudFormation input converters
 ├── container/           # OCI container runtime client (bollard, Docker/Podman)
 ├── overrides/           # Local override configuration
 ├── secrets/             # Secrets local resolver
@@ -498,6 +550,8 @@ make clean      # cargo clean
 - **Phase 7**: Observability + diagnostics ✅
 - **Phase 8**: Workflow acceleration ✅
 - **Phase 9**: Terraform compatibility ✅
+- **Phase 10**: Task definition field completeness + CloudFormation/CDK compatibility ✅
+- **Phase 11**: ECS Exec + environment variable extensions ✅
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
 
