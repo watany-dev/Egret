@@ -21,7 +21,7 @@ pub async fn execute_with_client(
     } else if let Some(task) = &args.task {
         Some(task.as_str())
     } else {
-        anyhow::bail!("Specify a task name or use --all to stop all tasks.");
+        anyhow::bail!("Specify a task family name or use --all to stop all tasks.");
     };
 
     // Stop and remove containers (best-effort)
@@ -138,7 +138,10 @@ mod tests {
         let err = execute_with_client(&args, &mock)
             .await
             .expect_err("should fail");
-        assert!(err.to_string().contains("Specify a task name or use --all"));
+        assert!(
+            err.to_string()
+                .contains("Specify a task family name or use --all")
+        );
     }
 
     #[tokio::test]

@@ -19,7 +19,7 @@ pub async fn execute_with_client(
     args: &StatsArgs,
     client: &(impl ContainerRuntime + ?Sized),
 ) -> Result<()> {
-    let task_filter = args.family.as_deref();
+    let task_filter = args.task.as_deref();
     let containers = client.list_containers(task_filter).await?;
 
     if containers.is_empty() {
@@ -156,7 +156,7 @@ mod tests {
             ..MockContainerClient::new()
         };
 
-        let args = StatsArgs { family: None };
+        let args = StatsArgs { task: None };
         execute_with_client(&args, &mock)
             .await
             .expect("should succeed");
@@ -170,14 +170,14 @@ mod tests {
             ..MockContainerClient::new()
         };
 
-        let args = StatsArgs { family: None };
+        let args = StatsArgs { task: None };
         execute_with_client(&args, &mock)
             .await
             .expect("should succeed");
     }
 
     #[tokio::test]
-    async fn stats_with_family_filter() {
+    async fn stats_with_task_filter() {
         let mock = MockContainerClient {
             list_containers_results: Mutex::new(VecDeque::from([Ok(vec![container_info("web")])])),
             stats_container_results: Mutex::new(VecDeque::from([Ok(sample_stats())])),
@@ -185,7 +185,7 @@ mod tests {
         };
 
         let args = StatsArgs {
-            family: Some("my-app".to_string()),
+            task: Some("my-app".to_string()),
         };
         execute_with_client(&args, &mock)
             .await
@@ -200,7 +200,7 @@ mod tests {
             ..MockContainerClient::new()
         };
 
-        let args = StatsArgs { family: None };
+        let args = StatsArgs { task: None };
         // Should succeed even when stats fail — shows "N/A"
         execute_with_client(&args, &mock)
             .await
