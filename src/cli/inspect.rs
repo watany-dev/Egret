@@ -19,14 +19,14 @@ pub async fn execute_with_client(
     args: &InspectArgs,
     client: &(impl ContainerRuntime + ?Sized),
 ) -> Result<()> {
-    let containers = client.list_containers(Some(&args.family)).await?;
+    let containers = client.list_containers(Some(&args.task)).await?;
 
     if containers.is_empty() {
-        bail!("No running containers found for task '{}'.", args.family);
+        bail!("No running containers found for task '{}'.", args.task);
     }
 
     let mut output = String::new();
-    let _ = writeln!(output, "Task: {}", args.family);
+    let _ = writeln!(output, "Task: {}", args.task);
     let _ = writeln!(output, "Containers: {}", containers.len());
     let _ = writeln!(output);
 
@@ -175,7 +175,7 @@ mod tests {
         };
 
         let args = InspectArgs {
-            family: "my-app".to_string(),
+            task: "my-app".to_string(),
         };
         let result = execute_with_client(&args, &mock).await;
         assert!(result.is_err());
@@ -198,7 +198,7 @@ mod tests {
         };
 
         let args = InspectArgs {
-            family: "my-app".to_string(),
+            task: "my-app".to_string(),
         };
         // Should succeed without error
         execute_with_client(&args, &mock)
@@ -221,7 +221,7 @@ mod tests {
         };
 
         let args = InspectArgs {
-            family: "my-app".to_string(),
+            task: "my-app".to_string(),
         };
         execute_with_client(&args, &mock)
             .await
@@ -279,7 +279,7 @@ mod tests {
         };
 
         let args = InspectArgs {
-            family: "my-app".to_string(),
+            task: "my-app".to_string(),
         };
         // Should succeed — secret masking happens internally
         execute_with_client(&args, &mock)

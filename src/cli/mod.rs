@@ -248,13 +248,13 @@ pub struct WatchArgs {
 #[derive(Parser)]
 pub struct InspectArgs {
     /// Task family name to inspect
-    pub family: String,
+    pub task: String,
 }
 
 #[derive(Parser)]
 pub struct StatsArgs {
     /// Filter by task family name
-    pub family: Option<String>,
+    pub task: Option<String>,
 }
 
 #[derive(Parser)]
@@ -300,7 +300,7 @@ pub struct RunArgs {
 
 #[derive(Parser)]
 pub struct StopArgs {
-    /// Task name or ID to stop
+    /// Task family name to stop
     pub task: Option<String>,
 
     /// Stop all running tasks
@@ -604,7 +604,7 @@ mod tests {
         let cli = Cli::try_parse_from(["lecs", "inspect", "my-app"]).expect("should parse");
         match cli.command {
             Command::Inspect(args) => {
-                assert_eq!(args.family, "my-app");
+                assert_eq!(args.task, "my-app");
             }
             _ => panic!("expected Inspect command"),
         }
@@ -615,18 +615,18 @@ mod tests {
         let cli = Cli::try_parse_from(["lecs", "stats"]).expect("should parse");
         match cli.command {
             Command::Stats(args) => {
-                assert!(args.family.is_none());
+                assert!(args.task.is_none());
             }
             _ => panic!("expected Stats command"),
         }
     }
 
     #[test]
-    fn parse_stats_with_family() {
+    fn parse_stats_with_task() {
         let cli = Cli::try_parse_from(["lecs", "stats", "my-app"]).expect("should parse");
         match cli.command {
             Command::Stats(args) => {
-                assert_eq!(args.family.as_deref(), Some("my-app"));
+                assert_eq!(args.task.as_deref(), Some("my-app"));
             }
             _ => panic!("expected Stats command"),
         }
