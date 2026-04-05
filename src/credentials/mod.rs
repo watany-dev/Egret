@@ -177,32 +177,24 @@ impl CredentialRefresher {
     /// Start the background refresh loop.
     ///
     /// Returns a `JoinHandle` that can be aborted to stop the loop.
-    /// On successful refresh, credentials in the shared state are updated.
-    /// On failure, the refresher logs a warning and retries after 60s.
+    /// On each iteration the refresher attempts to load credentials:
+    /// on success, the shared state is updated and the loop sleeps for an
+    /// interval derived from the new credential's TTL;
+    /// on failure, it logs a warning and sleeps for 60s before retrying.
     #[cfg(not(tarpaulin_include))]
     #[allow(dead_code)]
     pub fn start(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                let interval = {
-                    let guard = self.state.read().await;
-                    guard
-                        .credentials
-                        .as_ref()
-                        .map_or(DEFAULT_REFRESH_INTERVAL, |c| {
-                            compute_refresh_interval(&c.expiration)
-                        })
-                };
-
-                tokio::time::sleep(interval).await;
-
                 match load_local_credentials(self.role_arn.as_deref()).await {
                     Ok(creds) => {
+                        let interval = compute_refresh_interval(&creds.expiration);
                         tracing::debug!(
                             expiration = %creds.expiration,
                             "refreshed AWS credentials"
                         );
                         Self::update_state(&self.state, creds).await;
+                        tokio::time::sleep(interval).await;
                     }
                     Err(e) => {
                         tracing::warn!("failed to refresh AWS credentials: {e}");
