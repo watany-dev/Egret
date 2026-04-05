@@ -382,3 +382,28 @@ make coverage  # 95% 以上を維持
 - **P1-7**: サービスモードループのデータフロー図を追加
 - **P2-1**: `compute_refresh_interval()` を純粋関数として分離 — テスタビリティ向上
 - **P2-2**: `EventType::MaxRestartsExceeded` を追加 — 可観測性の向上
+
+---
+
+## イテレーション履歴
+
+実装は TDD の Red → Green → Refactor サイクルで 3 イテレーションに分割:
+
+### Iteration 1: リスタートポリシーの型定義と基盤
+- `src/events/mod.rs`: `EventType::Restarting` / `MaxRestartsExceeded` バリアントを追加
+- `src/orchestrator/mod.rs`: `RestartPolicy` enum、`RestartTracker` 構造体（`new`, `should_restart`, `next_backoff`, `record_restart`, `reset` を `const fn` で実装）、`OrchestratorError::MaxRestartsExceeded` バリアントを追加
+- 定数: `MAX_BACKOFF_SECS = 300`、`DEFAULT_MAX_RESTARTS = 10`
+- テスト: `RestartTracker` / `RestartPolicy` のパターン網羅 13 テスト + イベントシリアライズ 2 テスト
+
+### Iteration 2: `--service` フラグとサービスモードループ
+- `src/cli/mod.rs`: `RunArgs` に `--service` / `--restart` / `--max-restarts` フラグ、`RestartPolicyArg` enum、`From<RestartPolicyArg> for RestartPolicy` 実装（`conflicts_with = "dry_run"` / `requires = "service"` の clap 制約を付与）
+- `src/cli/task_lifecycle.rs`: `restart_container` 関数、`RestartOutcome` enum（`Replaced` / `RemovedButNotCreated` / `FailedBeforeRemoval` の3状態）を追加
+- `src/cli/run.rs`: `run_service_loop` 実装（essential コンテナ watcher を `tokio::mpsc` で集約し、`tokio::select!` で Ctrl+C との競合待ち）、`attempt_restart` ヘルパー、`spawn_essential_watcher` / `spawn_log_stream` を抽出
+- テスト: `restart_container` のモックテスト 6 件、CLI パーステスト 5 件
+
+### Iteration 3: クレデンシャルローテーション
+- `src/credentials/mod.rs`: `compute_refresh_interval` 純粋関数、`CredentialRefresher` 構造体（`new`, `update_state`, `start` を提供、`start` は `#[cfg(not(tarpaulin_include))]` でカバレッジ除外）
+- 定数: `DEFAULT_REFRESH_INTERVAL = 30min`、`MIN_REFRESH_INTERVAL = 1min`、`MAX_REFRESH_INTERVAL = 30min`
+- 更新間隔: `min(TTL/2, MAX_REFRESH_INTERVAL)` を下限 `MIN_REFRESH_INTERVAL` でクランプ、失敗時は 60s 後にリトライ
+- `src/cli/run.rs`: `run_service_loop` に `CredentialRefresher` を統合（`metadata_state: Some(_)` のときのみ起動、シャットダウン時に `handle.abort()` を watcher/log よりも先に実行）
+- テスト: `compute_refresh_interval` 6 件、`CredentialRefresher::new` / `update_state` 4 件
