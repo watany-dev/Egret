@@ -21,6 +21,10 @@ pub enum EventType {
     Exited,
     /// Cleanup completed for the task.
     CleanupCompleted,
+    /// Container is being restarted (service mode).
+    Restarting,
+    /// Container exceeded maximum restart count (service mode).
+    MaxRestartsExceeded,
 }
 
 /// A structured lifecycle event.
@@ -186,6 +190,8 @@ mod tests {
             (EventType::HealthCheckFailed, "\"health_check_failed\""),
             (EventType::Exited, "\"exited\""),
             (EventType::CleanupCompleted, "\"cleanup_completed\""),
+            (EventType::Restarting, "\"restarting\""),
+            (EventType::MaxRestartsExceeded, "\"max_restarts_exceeded\""),
         ];
 
         for (event_type, expected) in types {
