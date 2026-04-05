@@ -2365,10 +2365,12 @@ mod tests {
                             proptest::option::of(any::<bool>()),
                             proptest::collection::vec(arb_pm_spec(), 0..=2),
                         )
-                            .prop_map(move |(essential, port_mappings)| ContainerSpec {
-                                name: name.clone(),
-                                essential,
-                                port_mappings,
+                            .prop_map(move |(essential, port_mappings)| {
+                                ContainerSpec {
+                                    name: name.clone(),
+                                    essential,
+                                    port_mappings,
+                                }
                             })
                     })
                     .collect();

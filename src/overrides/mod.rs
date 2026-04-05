@@ -348,8 +348,7 @@ mod tests {
         }
 
         fn arb_environment() -> impl Strategy<Value = Environment> {
-            (arb_env_key(), arb_env_value())
-                .prop_map(|(name, value)| Environment { name, value })
+            (arb_env_key(), arb_env_value()).prop_map(|(name, value)| Environment { name, value })
         }
 
         /// Generate a `ContainerDefinition` with given name and random image/env/ports.
@@ -378,32 +377,30 @@ mod tests {
 
         /// Generate a `TaskDefinition` with 1..=4 containers with unique names.
         pub(super) fn arb_task_def() -> impl Strategy<Value = TaskDefinition> {
-            proptest::collection::vec(arb_container_name(), 1..=4)
-                .prop_flat_map(|names| {
-                    // Deduplicate container names.
-                    let mut seen = HashSet::new();
-                    let unique: Vec<String> = names
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, n)| {
-                            if seen.contains(&n) {
-                                format!("{n}{i}")
-                            } else {
-                                seen.insert(n.clone());
-                                n
-                            }
-                        })
-                        .collect();
-                    let strategies: Vec<_> =
-                        unique.iter().cloned().map(arb_container_def).collect();
-                    strategies.prop_map(|containers| TaskDefinition {
-                        family: "proptest".to_string(),
-                        task_role_arn: None,
-                        execution_role_arn: None,
-                        volumes: vec![],
-                        container_definitions: containers,
+            proptest::collection::vec(arb_container_name(), 1..=4).prop_flat_map(|names| {
+                // Deduplicate container names.
+                let mut seen = HashSet::new();
+                let unique: Vec<String> = names
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, n)| {
+                        if seen.contains(&n) {
+                            format!("{n}{i}")
+                        } else {
+                            seen.insert(n.clone());
+                            n
+                        }
                     })
+                    .collect();
+                let strategies: Vec<_> = unique.iter().cloned().map(arb_container_def).collect();
+                strategies.prop_map(|containers| TaskDefinition {
+                    family: "proptest".to_string(),
+                    task_role_arn: None,
+                    execution_role_arn: None,
+                    volumes: vec![],
+                    container_definitions: containers,
                 })
+            })
         }
 
         fn arb_container_override() -> impl Strategy<Value = ContainerOverride> {

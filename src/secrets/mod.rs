@@ -172,14 +172,11 @@ mod tests {
         use proptest::prelude::*;
 
         fn arb_arn() -> impl Strategy<Value = String> {
-            (
-                "[a-z0-9-]{1,20}",
-                "[0-9]{12}",
-                "[a-zA-Z0-9/_+=.@-]{1,20}",
-            )
-                .prop_map(|(region, account, name)| {
+            ("[a-z0-9-]{1,20}", "[0-9]{12}", "[a-zA-Z0-9/_+=.@-]{1,20}").prop_map(
+                |(region, account, name)| {
                     format!("arn:aws:secretsmanager:{region}:{account}:secret:{name}")
-                })
+                },
+            )
         }
 
         fn arb_secret_name() -> impl Strategy<Value = String> {
