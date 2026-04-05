@@ -319,6 +319,22 @@ async fn health_handler() -> StatusCode {
     StatusCode::OK
 }
 
+/// Constant-time byte-slice equality check.
+///
+/// Iterates over both slices in full to avoid early termination based on
+/// content. Used for authentication-token comparison to mitigate local
+/// timing side channels (CWE-208).
+#[allow(dead_code)]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
 #[allow(dead_code)]
 async fn credentials_handler(
     State(state): State<SharedState>,
@@ -329,7 +345,7 @@ async fn credentials_handler(
     let authorized = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == state.auth_token);
+        .is_some_and(|v| constant_time_eq(v.as_bytes(), state.auth_token.as_bytes()));
 
     if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -780,6 +796,25 @@ mod tests {
                 "token should be hex: {token}"
             );
         }
+    }
+
+    #[test]
+    fn constant_time_eq_equal_slices() {
+        assert!(constant_time_eq(b"abcdef", b"abcdef"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn constant_time_eq_different_content() {
+        assert!(!constant_time_eq(b"abcdef", b"abcdeg"));
+        assert!(!constant_time_eq(b"abcdef", b"zbcdef"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abc"));
+        assert!(!constant_time_eq(b"", b"x"));
     }
 
     #[tokio::test]

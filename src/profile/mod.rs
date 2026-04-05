@@ -32,7 +32,21 @@ pub enum ProfileError {
         /// The invalid profile name.
         name: String,
     },
+
+    /// Configuration file exceeds the maximum allowed size.
+    #[error("config file too large ({size} bytes, max {max} bytes): {path}")]
+    FileTooLarge {
+        /// Path to the configuration file.
+        path: PathBuf,
+        /// Actual size of the file in bytes.
+        size: u64,
+        /// Maximum allowed size in bytes.
+        max: u64,
+    },
 }
+
+/// Maximum `.lecs.toml` configuration file size (64 KiB).
+const MAX_CONFIG_FILE_SIZE: u64 = 64 * 1_024;
 
 /// Parsed `.lecs.toml` configuration.
 #[derive(Debug, Default, serde::Deserialize)]
@@ -59,8 +73,20 @@ impl LecsConfig {
     /// # Errors
     ///
     /// Returns `ProfileError::ReadConfig` if the file cannot be read,
+    /// `ProfileError::FileTooLarge` if the file exceeds the configured size limit,
     /// or `ProfileError::ParseConfig` if the TOML is invalid.
     pub fn from_file(path: &Path) -> Result<Self, ProfileError> {
+        let metadata = std::fs::metadata(path).map_err(|source| ProfileError::ReadConfig {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if metadata.len() > MAX_CONFIG_FILE_SIZE {
+            return Err(ProfileError::FileTooLarge {
+                path: path.to_path_buf(),
+                size: metadata.len(),
+                max: MAX_CONFIG_FILE_SIZE,
+            });
+        }
         let content = std::fs::read_to_string(path).map_err(|source| ProfileError::ReadConfig {
             path: path.to_path_buf(),
             source,
@@ -308,6 +334,22 @@ mod tests {
         let err = result.unwrap_err();
         let missing_path_str = missing_path.to_string_lossy();
         assert!(err.to_string().contains(missing_path_str.as_ref()));
+    }
+
+    #[test]
+    fn parse_config_file_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(".lecs.toml");
+        #[allow(clippy::cast_possible_truncation)]
+        let big = "x".repeat((MAX_CONFIG_FILE_SIZE + 1) as usize);
+        std::fs::write(&config_path, big).unwrap();
+
+        let err = LecsConfig::from_file(&config_path).unwrap_err();
+        assert!(
+            matches!(err, ProfileError::FileTooLarge { .. }),
+            "unexpected error: {err}"
+        );
+        assert!(err.to_string().contains("too large"));
     }
 
     // ── Error display tests ──

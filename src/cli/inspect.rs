@@ -98,12 +98,18 @@ fn parse_secret_names(label_value: Option<&str>) -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Mask the value of an environment variable if its name is in the secret set.
+/// Environment variable names that must always be masked, regardless of
+/// whether the container declares them as secrets. These are values injected
+/// by Lecs itself that grant access to sensitive sidecar endpoints.
+const ALWAYS_MASK_ENV_NAMES: &[&str] = &["AWS_CONTAINER_AUTHORIZATION_TOKEN"];
+
+/// Mask the value of an environment variable if its name is in the secret set
+/// or in the always-mask list.
 fn mask_env_var(env_var: &str, secret_names: &HashSet<String>) -> String {
     env_var.split_once('=').map_or_else(
         || env_var.to_string(),
         |(name, _value)| {
-            if secret_names.contains(name) {
+            if secret_names.contains(name) || ALWAYS_MASK_ENV_NAMES.contains(&name) {
                 format!("{name}=******")
             } else {
                 env_var.to_string()
@@ -247,6 +253,25 @@ mod tests {
     fn mask_env_var_no_equals() {
         let secret_names: HashSet<String> = HashSet::new();
         assert_eq!(mask_env_var("PATH", &secret_names), "PATH");
+    }
+
+    #[test]
+    fn mask_env_var_always_masks_auth_token() {
+        let secret_names: HashSet<String> = HashSet::new();
+        assert_eq!(
+            mask_env_var("AWS_CONTAINER_AUTHORIZATION_TOKEN=deadbeef", &secret_names),
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN=******"
+        );
+    }
+
+    #[test]
+    fn mask_env_var_always_mask_independent_of_secrets_label() {
+        // Even if the container did not declare secrets, the auth token is masked.
+        let secret_names: HashSet<String> = std::iter::once("OTHER_SECRET".to_string()).collect();
+        assert_eq!(
+            mask_env_var("AWS_CONTAINER_AUTHORIZATION_TOKEN=abc123", &secret_names),
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN=******"
+        );
     }
 
     #[test]
