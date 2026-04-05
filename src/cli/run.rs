@@ -253,8 +253,9 @@ pub async fn run_service_loop(
         }
     }
 
-    // Drop our tx clone so that if all watchers exit without restart, rx closes.
-    // (We still need a handle for respawning on restart, so keep the original.)
+    // Keep the original sender so restarted essential containers can spawn
+    // replacement watchers. Because `tx` remains alive here, `rx` will not
+    // close solely because existing watcher tasks exit.
     let result: Result<()> = loop {
         tokio::select! {
             Some(exit) = rx.recv() => {
