@@ -73,6 +73,14 @@ pub enum TaskDefError {
         line_number: usize,
         detail: String,
     },
+
+    #[error(
+        "environment file path '{value}' is unsafe: must be a relative path without '..' components"
+    )]
+    EnvironmentFilePathUnsafe { value: String },
+
+    #[error("environment file too large ({size} bytes, max {max} bytes): {path}")]
+    EnvironmentFileTooLarge { path: PathBuf, size: u64, max: u64 },
 }
 
 /// ECS task definition top-level structure.
@@ -407,19 +415,58 @@ pub struct TmpfsMount {
     pub mount_options: Vec<String>,
 }
 
+/// Maximum environment file size (1 MiB).
+const MAX_ENV_FILE_SIZE: u64 = 1_024 * 1_024;
+
+/// Validate that an environment file path is safe: relative, no `..` components.
+fn validate_env_file_path(value: &str) -> Result<(), TaskDefError> {
+    let raw = std::path::Path::new(value);
+    if raw.is_absolute() {
+        return Err(TaskDefError::EnvironmentFilePathUnsafe {
+            value: value.to_string(),
+        });
+    }
+    for component in raw.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(TaskDefError::EnvironmentFilePathUnsafe {
+                value: value.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Load environment variables from `.env`-formatted files.
 ///
 /// Each file is read line by line. Lines starting with `#` are comments,
 /// empty lines are skipped, and lines without `=` are ignored.
 /// Returns key-value pairs in insertion order (earlier files first, then later ones).
 /// Duplicate keys are preserved; the caller is responsible for last-wins semantics.
+///
+/// Paths are restricted to relative paths beneath `base_dir`. Absolute paths
+/// and paths containing `..` components are rejected to prevent reading files
+/// outside the project directory. Each file is capped at `MAX_ENV_FILE_SIZE`.
 pub fn load_environment_files(
     files: &[EnvironmentFile],
     base_dir: &Path,
 ) -> Result<Vec<(String, String)>, TaskDefError> {
     let mut vars = Vec::new();
     for ef in files {
+        validate_env_file_path(&ef.value)?;
         let path = base_dir.join(&ef.value);
+        let metadata =
+            std::fs::metadata(&path).map_err(|source| TaskDefError::EnvironmentFileRead {
+                path: path.clone(),
+                source,
+            })?;
+        if metadata.len() > MAX_ENV_FILE_SIZE {
+            let size = metadata.len();
+            return Err(TaskDefError::EnvironmentFileTooLarge {
+                path,
+                size,
+                max: MAX_ENV_FILE_SIZE,
+            });
+        }
         let content =
             std::fs::read_to_string(&path).map_err(|source| TaskDefError::EnvironmentFileRead {
                 path: path.clone(),
@@ -2051,6 +2098,94 @@ mod tests {
         assert_eq!(vars[0].1, "first");
         assert_eq!(vars[2].0, "FOO");
         assert_eq!(vars[2].1, "second");
+    }
+
+    #[test]
+    fn load_environment_files_rejects_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![EnvironmentFile {
+            value: "/etc/passwd".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let result = load_environment_files(&files, dir.path());
+        assert!(matches!(
+            result,
+            Err(TaskDefError::EnvironmentFilePathUnsafe { .. })
+        ));
+    }
+
+    #[test]
+    fn load_environment_files_rejects_parent_dir_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![EnvironmentFile {
+            value: "../../etc/passwd".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let result = load_environment_files(&files, dir.path());
+        assert!(matches!(
+            result,
+            Err(TaskDefError::EnvironmentFilePathUnsafe { .. })
+        ));
+    }
+
+    #[test]
+    fn load_environment_files_rejects_mixed_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![EnvironmentFile {
+            value: "safe/../../escape".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let result = load_environment_files(&files, dir.path());
+        assert!(matches!(
+            result,
+            Err(TaskDefError::EnvironmentFilePathUnsafe { .. })
+        ));
+    }
+
+    #[test]
+    fn load_environment_files_accepts_current_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.env"), "FOO=bar\n").unwrap();
+        let files = vec![EnvironmentFile {
+            value: "./test.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let vars = load_environment_files(&files, dir.path()).unwrap();
+        assert_eq!(vars, vec![("FOO".to_string(), "bar".to_string())]);
+    }
+
+    #[test]
+    fn load_environment_files_rejects_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        #[allow(clippy::cast_possible_truncation)]
+        let big_contents = "X".repeat((MAX_ENV_FILE_SIZE + 1) as usize);
+        std::fs::write(dir.path().join("big.env"), big_contents).unwrap();
+        let files = vec![EnvironmentFile {
+            value: "big.env".to_string(),
+            r#type: "s3".to_string(),
+        }];
+        let result = load_environment_files(&files, dir.path());
+        assert!(matches!(
+            result,
+            Err(TaskDefError::EnvironmentFileTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn env_file_error_display_messages() {
+        let unsafe_err = TaskDefError::EnvironmentFilePathUnsafe {
+            value: "/etc/passwd".to_string(),
+        };
+        assert!(unsafe_err.to_string().contains("unsafe"));
+        assert!(unsafe_err.to_string().contains("/etc/passwd"));
+
+        let size_err = TaskDefError::EnvironmentFileTooLarge {
+            path: PathBuf::from("/tmp/big.env"),
+            size: 2_000_000,
+            max: MAX_ENV_FILE_SIZE,
+        };
+        assert!(size_err.to_string().contains("too large"));
+        assert!(size_err.to_string().contains("2000000"));
     }
 
     // --- linuxParameters tests ---

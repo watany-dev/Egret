@@ -17,9 +17,15 @@ pub enum OverrideError {
         source: std::io::Error,
     },
 
+    #[error("override file too large ({size} bytes, max {max} bytes): {path}")]
+    FileTooLarge { path: PathBuf, size: u64, max: u64 },
+
     #[error("failed to parse override JSON: {0}")]
     ParseJson(#[from] serde_json::Error),
 }
+
+/// Maximum override file size (1 MiB).
+const MAX_OVERRIDE_FILE_SIZE: u64 = 1_024 * 1_024;
 
 /// Top-level override configuration (`lecs-override.json`).
 #[derive(Debug, serde::Deserialize)]
@@ -47,6 +53,17 @@ pub struct ContainerOverride {
 impl OverrideConfig {
     /// Load an override config from a file path.
     pub fn from_file(path: &Path) -> Result<Self, OverrideError> {
+        let metadata = std::fs::metadata(path).map_err(|source| OverrideError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if metadata.len() > MAX_OVERRIDE_FILE_SIZE {
+            return Err(OverrideError::FileTooLarge {
+                path: path.to_path_buf(),
+                size: metadata.len(),
+                max: MAX_OVERRIDE_FILE_SIZE,
+            });
+        }
         let content = std::fs::read_to_string(path).map_err(|source| OverrideError::ReadFile {
             path: path.to_path_buf(),
             source,
@@ -295,5 +312,20 @@ mod tests {
         let err = OverrideConfig::from_file(Path::new("/no/such")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("failed to read override file"));
+    }
+
+    #[test]
+    fn error_file_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.json");
+        #[allow(clippy::cast_possible_truncation)]
+        let contents = "x".repeat((MAX_OVERRIDE_FILE_SIZE + 1) as usize);
+        std::fs::write(&path, contents).unwrap();
+        let err = OverrideConfig::from_file(&path).unwrap_err();
+        assert!(
+            matches!(err, OverrideError::FileTooLarge { .. }),
+            "unexpected error: {err}"
+        );
+        assert!(err.to_string().contains("too large"));
     }
 }

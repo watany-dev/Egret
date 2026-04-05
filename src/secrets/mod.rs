@@ -17,12 +17,18 @@ pub enum SecretsError {
         source: std::io::Error,
     },
 
+    #[error("secrets file too large ({size} bytes, max {max} bytes): {path}")]
+    FileTooLarge { path: PathBuf, size: u64, max: u64 },
+
     #[error("failed to parse secrets JSON: {0}")]
     ParseJson(#[from] serde_json::Error),
 
     #[error("secret ARN not found in local mapping: {arn}")]
     ArnNotFound { arn: String },
 }
+
+/// Maximum secrets file size (1 MiB).
+const MAX_SECRETS_FILE_SIZE: u64 = 1_024 * 1_024;
 
 /// Resolves Secrets Manager ARN references to local values.
 #[derive(Debug)]
@@ -33,6 +39,17 @@ pub struct SecretsResolver {
 impl SecretsResolver {
     /// Load a secrets mapping from a file path.
     pub fn from_file(path: &Path) -> Result<Self, SecretsError> {
+        let metadata = std::fs::metadata(path).map_err(|source| SecretsError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if metadata.len() > MAX_SECRETS_FILE_SIZE {
+            return Err(SecretsError::FileTooLarge {
+                path: path.to_path_buf(),
+                size: metadata.len(),
+                max: MAX_SECRETS_FILE_SIZE,
+            });
+        }
         let content = std::fs::read_to_string(path).map_err(|source| SecretsError::ReadFile {
             path: path.to_path_buf(),
             source,
@@ -163,5 +180,20 @@ mod tests {
             arn: "arn:test".to_string(),
         };
         assert!(err.to_string().contains("arn:test"));
+    }
+
+    #[test]
+    fn error_file_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.json");
+        #[allow(clippy::cast_possible_truncation)]
+        let contents = "x".repeat((MAX_SECRETS_FILE_SIZE + 1) as usize);
+        std::fs::write(&path, contents).unwrap();
+        let err = SecretsResolver::from_file(&path).unwrap_err();
+        assert!(
+            matches!(err, SecretsError::FileTooLarge { .. }),
+            "unexpected error: {err}"
+        );
+        assert!(err.to_string().contains("too large"));
     }
 }
