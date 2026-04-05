@@ -10,6 +10,7 @@ use super::task_lifecycle::{
     RestartOutcome, cleanup, restart_container, run_task, start_metadata_server,
 };
 use crate::container::ContainerClient;
+use crate::credentials::CredentialRefresher;
 use crate::events::{EventSink, EventType, LifecycleEvent, NullEventSink};
 use crate::metadata::{self, SharedState};
 use crate::orchestrator::{
@@ -227,7 +228,13 @@ pub async fn run_service_loop(
         .map(|(id, name)| (name.clone(), id.clone()))
         .collect();
 
-    // 4. Spawn log streams and essential watchers.
+    // 4. Start background credential refresher (only if metadata server is active).
+    let credential_refresher_handle: Option<JoinHandle<()>> = metadata_state.map(|state| {
+        let refresher = CredentialRefresher::new(Arc::clone(state), task_def.task_role_arn.clone());
+        refresher.start()
+    });
+
+    // 5. Spawn log streams and essential watchers.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EssentialExit>();
     let mut log_handles: HashMap<String, JoinHandle<()>> = HashMap::new();
     let mut watcher_handles: HashMap<String, JoinHandle<()>> = HashMap::new();
@@ -337,7 +344,10 @@ pub async fn run_service_loop(
         }
     };
 
-    // 5. Shutdown: abort watchers/streams, then cleanup containers.
+    // 6. Shutdown: abort refresher/watchers/streams, then cleanup containers.
+    if let Some(h) = credential_refresher_handle {
+        h.abort();
+    }
     for h in watcher_handles.values() {
         h.abort();
     }
