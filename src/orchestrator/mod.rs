@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::container::ContainerRuntime;
 use crate::events::{EventSink, EventType, LifecycleEvent};
 use crate::taskdef::{DependencyCondition, DependsOn, HealthCheck};
@@ -25,6 +27,108 @@ pub enum OrchestratorError {
 
     #[error("health check timed out for container '{0}'")]
     HealthCheckTimeout(String),
+
+    #[error("container '{0}' exceeded maximum restart count ({1})")]
+    MaxRestartsExceeded(String, u32),
+}
+
+/// Maximum backoff duration between container restart attempts (5 minutes).
+const MAX_BACKOFF_SECS: u64 = 300;
+
+/// Default maximum restart attempts before giving up.
+#[allow(dead_code)]
+pub const DEFAULT_MAX_RESTARTS: u32 = 10;
+
+/// Container restart policy for service mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub enum RestartPolicy {
+    /// Do not restart (default, task-runner behavior).
+    #[default]
+    None,
+    /// Restart only on non-zero exit code.
+    OnFailure,
+    /// Always restart regardless of exit code.
+    Always,
+}
+
+/// Tracks restart state for a single container.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct RestartTracker {
+    policy: RestartPolicy,
+    restart_count: u32,
+    max_restarts: u32,
+}
+
+#[allow(dead_code)]
+impl RestartTracker {
+    /// Create a new restart tracker with the given policy and maximum restart count.
+    #[must_use]
+    pub const fn new(policy: RestartPolicy, max_restarts: u32) -> Self {
+        Self {
+            policy,
+            restart_count: 0,
+            max_restarts,
+        }
+    }
+
+    /// Return `true` if the container should be restarted given `exit_code`.
+    ///
+    /// Takes the policy and current restart count into account. Returns `false`
+    /// when `restart_count` has reached `max_restarts`.
+    #[must_use]
+    pub const fn should_restart(&self, exit_code: i64) -> bool {
+        if self.restart_count >= self.max_restarts {
+            return false;
+        }
+        match self.policy {
+            RestartPolicy::None => false,
+            RestartPolicy::OnFailure => exit_code != 0,
+            RestartPolicy::Always => true,
+        }
+    }
+
+    /// Compute the next backoff duration based on current restart count.
+    ///
+    /// Follows exponential backoff: `min(2^restart_count, MAX_BACKOFF_SECS)` seconds.
+    #[must_use]
+    pub const fn next_backoff(&self) -> Duration {
+        let secs = match 1u64.checked_shl(self.restart_count) {
+            Some(v) if v < MAX_BACKOFF_SECS => v,
+            _ => MAX_BACKOFF_SECS,
+        };
+        Duration::from_secs(secs)
+    }
+
+    /// Increment the restart counter.
+    pub const fn record_restart(&mut self) {
+        self.restart_count = self.restart_count.saturating_add(1);
+    }
+
+    /// Reset the counter (e.g. after the container has stabilized).
+    pub const fn reset(&mut self) {
+        self.restart_count = 0;
+    }
+
+    /// Return the current restart count.
+    #[must_use]
+    pub const fn restart_count(&self) -> u32 {
+        self.restart_count
+    }
+
+    /// Return the restart policy.
+    #[must_use]
+    pub const fn policy(&self) -> RestartPolicy {
+        self.policy
+    }
+
+    /// Return the configured maximum restart count.
+    #[must_use]
+    pub const fn max_restarts(&self) -> u32 {
+        self.max_restarts
+    }
 }
 
 /// Lightweight dependency information for DAG resolution.
@@ -405,7 +509,6 @@ pub async fn wait_for_condition(
 }
 
 /// Result of an essential container exiting.
-#[allow(dead_code)]
 pub struct EssentialExit {
     pub container_name: String,
     pub exit_code: i64,
@@ -415,7 +518,6 @@ pub struct EssentialExit {
 ///
 /// Intended to be spawned via `tokio::spawn` and combined with `tokio::select!`
 /// alongside Ctrl+C signal handling.
-#[allow(dead_code)]
 pub async fn watch_essential_exit(
     client: &(impl ContainerRuntime + ?Sized),
     id: &str,
@@ -499,6 +601,139 @@ mod tests {
     use super::*;
     use crate::events::{CollectingEventSink, NullEventSink};
     use crate::taskdef::DependencyCondition;
+
+    // --- RestartPolicy / RestartTracker tests ---
+
+    #[test]
+    fn restart_policy_default_is_none() {
+        assert_eq!(RestartPolicy::default(), RestartPolicy::None);
+    }
+
+    #[test]
+    fn restart_policy_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&RestartPolicy::None).unwrap(),
+            "\"none\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RestartPolicy::OnFailure).unwrap(),
+            "\"on_failure\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RestartPolicy::Always).unwrap(),
+            "\"always\""
+        );
+    }
+
+    #[test]
+    fn should_restart_none_never_restarts() {
+        let tracker = RestartTracker::new(RestartPolicy::None, 10);
+        assert!(!tracker.should_restart(0));
+        assert!(!tracker.should_restart(1));
+        assert!(!tracker.should_restart(137));
+    }
+
+    #[test]
+    fn should_restart_on_failure_only_nonzero() {
+        let tracker = RestartTracker::new(RestartPolicy::OnFailure, 10);
+        assert!(!tracker.should_restart(0));
+        assert!(tracker.should_restart(1));
+        assert!(tracker.should_restart(137));
+    }
+
+    #[test]
+    fn should_restart_always_restarts_any_code() {
+        let tracker = RestartTracker::new(RestartPolicy::Always, 10);
+        assert!(tracker.should_restart(0));
+        assert!(tracker.should_restart(1));
+    }
+
+    #[test]
+    fn should_restart_respects_max_restarts() {
+        let mut tracker = RestartTracker::new(RestartPolicy::Always, 3);
+        for _ in 0..3 {
+            assert!(tracker.should_restart(0));
+            tracker.record_restart();
+        }
+        assert!(!tracker.should_restart(0));
+        assert!(!tracker.should_restart(1));
+    }
+
+    #[test]
+    fn should_restart_respects_max_restarts_on_failure() {
+        let mut tracker = RestartTracker::new(RestartPolicy::OnFailure, 2);
+        tracker.record_restart();
+        tracker.record_restart();
+        assert!(!tracker.should_restart(1));
+    }
+
+    #[test]
+    fn next_backoff_exponential_progression() {
+        let mut tracker = RestartTracker::new(RestartPolicy::Always, 20);
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(1));
+        tracker.record_restart();
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(2));
+        tracker.record_restart();
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(4));
+        tracker.record_restart();
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(8));
+    }
+
+    #[test]
+    fn next_backoff_caps_at_max() {
+        let mut tracker = RestartTracker::new(RestartPolicy::Always, 20);
+        // After 8 restarts, 2^8 = 256 < 300
+        for _ in 0..8 {
+            tracker.record_restart();
+        }
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(256));
+        // After 9 restarts, 2^9 = 512 should be capped to 300
+        tracker.record_restart();
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(300));
+        // And remain capped at 15 restarts
+        for _ in 0..6 {
+            tracker.record_restart();
+        }
+        assert_eq!(tracker.next_backoff(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn record_restart_increments_counter() {
+        let mut tracker = RestartTracker::new(RestartPolicy::Always, 10);
+        assert_eq!(tracker.restart_count(), 0);
+        tracker.record_restart();
+        assert_eq!(tracker.restart_count(), 1);
+        tracker.record_restart();
+        assert_eq!(tracker.restart_count(), 2);
+    }
+
+    #[test]
+    fn reset_clears_counter() {
+        let mut tracker = RestartTracker::new(RestartPolicy::Always, 10);
+        tracker.record_restart();
+        tracker.record_restart();
+        tracker.record_restart();
+        assert_eq!(tracker.restart_count(), 3);
+        tracker.reset();
+        assert_eq!(tracker.restart_count(), 0);
+        assert!(tracker.should_restart(1));
+    }
+
+    #[test]
+    fn tracker_exposes_policy_and_max() {
+        let tracker = RestartTracker::new(RestartPolicy::OnFailure, 5);
+        assert_eq!(tracker.policy(), RestartPolicy::OnFailure);
+        assert_eq!(tracker.max_restarts(), 5);
+    }
+
+    #[test]
+    fn max_restarts_exceeded_error_display() {
+        let err = OrchestratorError::MaxRestartsExceeded("web".into(), 10);
+        assert_eq!(
+            err.to_string(),
+            "container 'web' exceeded maximum restart count (10)"
+        );
+    }
 
     fn dep(name: &str, depends: &[(&str, DependencyCondition)]) -> DependencyInfo {
         DependencyInfo {

@@ -280,6 +280,7 @@ pub struct InitArgs {
 }
 
 #[derive(Parser)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct RunArgs {
     /// Task definition source, overrides, secrets, and profile
     #[command(flatten)]
@@ -296,6 +297,40 @@ pub struct RunArgs {
     /// Output lifecycle events as NDJSON to stderr
     #[arg(long)]
     pub events: bool,
+
+    /// Run in service mode (auto-restart containers, long-running until Ctrl+C)
+    #[arg(long, conflicts_with = "dry_run")]
+    pub service: bool,
+
+    /// Restart policy for service mode: none, on-failure, always
+    #[arg(long, value_enum, default_value = "on-failure", requires = "service")]
+    pub restart: RestartPolicyArg,
+
+    /// Maximum restart attempts before giving up (service mode only)
+    #[arg(long, default_value = "10", requires = "service")]
+    pub max_restarts: u32,
+}
+
+/// CLI-facing restart policy argument (maps to `orchestrator::RestartPolicy`).
+#[derive(Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum RestartPolicyArg {
+    /// Do not restart (task-runner behavior).
+    None,
+    /// Restart only on non-zero exit code.
+    #[default]
+    OnFailure,
+    /// Always restart regardless of exit code.
+    Always,
+}
+
+impl From<RestartPolicyArg> for crate::orchestrator::RestartPolicy {
+    fn from(arg: RestartPolicyArg) -> Self {
+        match arg {
+            RestartPolicyArg::None => Self::None,
+            RestartPolicyArg::OnFailure => Self::OnFailure,
+            RestartPolicyArg::Always => Self::Always,
+        }
+    }
 }
 
 #[derive(Parser)]

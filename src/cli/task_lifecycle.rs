@@ -122,6 +122,92 @@ pub async fn start_metadata_server(
     Ok((server, state))
 }
 
+/// Result of attempting to restart a single container.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum RestartOutcome {
+    /// Old container removed and replaced by a new one with the returned ID.
+    Replaced { new_id: String },
+    /// Creating or starting the new container failed, and no container is
+    /// left in the runtime (either the old one was already removed, or
+    /// there was no old container to begin with on the create-only path).
+    /// The caller should retain `old_id = None` and retry at next backoff.
+    CreateFailed(anyhow::Error),
+    /// Failed before the old container was removed (still present in the
+    /// runtime); the caller should keep the existing `old_id` and retry.
+    FailedBeforeRemoval(anyhow::Error),
+}
+
+/// Restart a single container within a running task (service mode).
+///
+/// Performs: stop(old) → remove(old) → create(new) → start(new) → update metadata.
+/// Emits a `Restarting` lifecycle event at the start and a `Started` event after
+/// the new container has started. Metadata state's `container_id` mapping is
+/// updated atomically so running HTTP requests see the new ID on next poll.
+///
+/// If `old_id` is `None`, the stop/remove phase is skipped (create-only retry
+/// path, used after a previous attempt that left no old container behind).
+#[allow(dead_code, clippy::too_many_arguments)]
+pub async fn restart_container(
+    client: &(impl ContainerRuntime + ?Sized),
+    container_name: &str,
+    old_id: Option<&str>,
+    config: &crate::container::ContainerConfig,
+    metadata_state: Option<&SharedState>,
+    event_sink: &dyn EventSink,
+    family: &str,
+) -> RestartOutcome {
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Restarting,
+        family,
+        Some(container_name),
+        None,
+    ));
+
+    if let Some(id) = old_id {
+        // Best-effort stop: already-stopped containers are fine.
+        if let Err(e) = client.stop_container(id, None).await {
+            tracing::warn!(container = %container_name, error = %e, "Stop failed during restart (continuing)");
+        }
+
+        if let Err(e) = client.remove_container(id).await {
+            return RestartOutcome::FailedBeforeRemoval(e.into());
+        }
+    }
+
+    let new_id = match client.create_container(config).await {
+        Ok(id) => id,
+        Err(e) => return RestartOutcome::CreateFailed(e.into()),
+    };
+
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Created,
+        family,
+        Some(container_name),
+        None,
+    ));
+
+    if let Err(e) = client.start_container(&new_id).await {
+        // Container was created but not started — clean it up.
+        let _ = client.remove_container(&new_id).await;
+        return RestartOutcome::CreateFailed(e.into());
+    }
+
+    event_sink.emit(&LifecycleEvent::new(
+        EventType::Started,
+        family,
+        Some(container_name),
+        None,
+    ));
+
+    if let Some(state) = metadata_state {
+        metadata::update_container_id(state, container_name, &new_id).await;
+    }
+
+    tracing::info!(container = %container_name, new_id = %new_id, "Container restarted");
+    RestartOutcome::Replaced { new_id }
+}
+
 /// Best-effort cleanup: stop and remove containers, then remove the network.
 pub async fn cleanup(
     client: &(impl ContainerRuntime + ?Sized),
@@ -519,6 +605,158 @@ mod tests {
         ));
         assert_eq!(events[0].family, "my-app");
         assert!(events[0].container_name.is_none());
+    }
+
+    fn default_config(name: &str) -> crate::container::ContainerConfig {
+        crate::container::ContainerConfig {
+            name: name.to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_container_replaces_old_with_new() {
+        use crate::events::CollectingEventSink;
+
+        let mock = MockContainerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            create_container_results: Mutex::new(VecDeque::from([Ok("new-id".to_string())])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockContainerClient::new()
+        };
+
+        let config = default_config("my-app-web");
+        let sink = CollectingEventSink::new();
+        let outcome =
+            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+
+        match outcome {
+            RestartOutcome::Replaced { new_id } => assert_eq!(new_id, "new-id"),
+            other => panic!("expected Replaced, got {other:?}"),
+        }
+
+        let events = sink.events();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            events[0].event_type,
+            crate::events::EventType::Restarting
+        ));
+        assert!(matches!(
+            events[1].event_type,
+            crate::events::EventType::Created
+        ));
+        assert!(matches!(
+            events[2].event_type,
+            crate::events::EventType::Started
+        ));
+    }
+
+    #[tokio::test]
+    async fn restart_container_tolerates_stop_failure() {
+        use crate::events::CollectingEventSink;
+
+        let mock = MockContainerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Err(
+                crate::container::ContainerError::RuntimeNotRunning,
+            )])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            create_container_results: Mutex::new(VecDeque::from([Ok("new-id".to_string())])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockContainerClient::new()
+        };
+
+        let config = default_config("my-app-web");
+        let sink = CollectingEventSink::new();
+        let outcome =
+            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+
+        assert!(matches!(outcome, RestartOutcome::Replaced { .. }));
+    }
+
+    #[tokio::test]
+    async fn restart_container_fails_before_removal_when_remove_errors() {
+        use crate::events::CollectingEventSink;
+
+        let mock = MockContainerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Err(
+                crate::container::ContainerError::RuntimeNotRunning,
+            )])),
+            ..MockContainerClient::new()
+        };
+
+        let config = default_config("my-app-web");
+        let sink = CollectingEventSink::new();
+        let outcome =
+            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+
+        assert!(matches!(outcome, RestartOutcome::FailedBeforeRemoval(_)));
+    }
+
+    #[tokio::test]
+    async fn restart_container_create_failed_when_create_fails() {
+        use crate::events::CollectingEventSink;
+
+        let mock = MockContainerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            create_container_results: Mutex::new(VecDeque::from([Err(
+                crate::container::ContainerError::RuntimeNotRunning,
+            )])),
+            ..MockContainerClient::new()
+        };
+
+        let config = default_config("my-app-web");
+        let sink = CollectingEventSink::new();
+        let outcome =
+            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+
+        assert!(matches!(outcome, RestartOutcome::CreateFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn restart_container_create_failed_when_start_fails() {
+        use crate::events::CollectingEventSink;
+
+        let mock = MockContainerClient {
+            stop_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            remove_container_results: Mutex::new(VecDeque::from([Ok(()), Ok(())])),
+            create_container_results: Mutex::new(VecDeque::from([Ok("new-id".to_string())])),
+            start_container_results: Mutex::new(VecDeque::from([Err(
+                crate::container::ContainerError::RuntimeNotRunning,
+            )])),
+            ..MockContainerClient::new()
+        };
+
+        let config = default_config("my-app-web");
+        let sink = CollectingEventSink::new();
+        let outcome =
+            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+
+        assert!(matches!(outcome, RestartOutcome::CreateFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn restart_container_create_only_path_when_old_id_none() {
+        use crate::events::CollectingEventSink;
+
+        // old_id=None: stop/remove are skipped; only create/start are called.
+        let mock = MockContainerClient {
+            create_container_results: Mutex::new(VecDeque::from([Ok("fresh-id".to_string())])),
+            start_container_results: Mutex::new(VecDeque::from([Ok(())])),
+            ..MockContainerClient::new()
+        };
+
+        let config = default_config("my-app-web");
+        let sink = CollectingEventSink::new();
+        let outcome = restart_container(&mock, "web", None, &config, None, &sink, "my-app").await;
+
+        match outcome {
+            RestartOutcome::Replaced { new_id } => assert_eq!(new_id, "fresh-id"),
+            other => panic!("expected Replaced, got {other:?}"),
+        }
     }
 
     #[test]

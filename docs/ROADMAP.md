@@ -234,17 +234,17 @@ src/
   - `tmpfs` → `HostConfig::tmpfs`
   - `sharedMemorySize` → `HostConfig::shm_size`
 
-### Phase 12: サービスモード MVP
+### Phase 12: サービスモード MVP ✅
 **目標**: コンテナ障害時の自動再起動
 
 > `docs/design/service-gap-analysis.md` に基づく。ECS Service の最小要件であるリスタートポリシーと、長時間稼働に必要なクレデンシャルローテーションを実装する。
 
-- [ ] リスタートポリシー
+- [x] リスタートポリシー
   - `RestartPolicy` enum（`None` / `OnFailure` / `Always`）+ 指数バックオフ（1s → 2s → ... → 300s）
   - essential コンテナ終了時の再起動判定ロジック
-- [ ] `lecs run --service` フラグ
+- [x] `lecs run --service` フラグ
   - reconciliation ループ有効化、Ctrl+C まで常時稼働
-- [ ] クレデンシャルローテーション
+- [x] クレデンシャルローテーション
   - `tokio::spawn` でバックグラウンドリフレッシュ
   - `AppState` 内の credentials を `RwLock` で保護、TTL/2 間隔で更新
 
