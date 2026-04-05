@@ -397,7 +397,7 @@ make coverage  # 95% 以上を維持
 
 ### Iteration 2: `--service` フラグとサービスモードループ
 - `src/cli/mod.rs`: `RunArgs` に `--service` / `--restart` / `--max-restarts` フラグ、`RestartPolicyArg` enum、`From<RestartPolicyArg> for RestartPolicy` 実装（`conflicts_with = "dry_run"` / `requires = "service"` の clap 制約を付与）
-- `src/cli/task_lifecycle.rs`: `restart_container` 関数、`RestartOutcome` enum（`Replaced` / `RemovedButNotCreated` / `FailedBeforeRemoval` の3状態）を追加
+- `src/cli/task_lifecycle.rs`: `restart_container` 関数、`RestartOutcome` enum（`Replaced` / `CreateFailed` / `FailedBeforeRemoval` の3状態）を追加
 - `src/cli/run.rs`: `run_service_loop` 実装（essential コンテナ watcher を `tokio::mpsc` で集約し、`tokio::select!` で Ctrl+C との競合待ち）、`attempt_restart` ヘルパー、`spawn_essential_watcher` / `spawn_log_stream` を抽出
 - テスト: `restart_container` のモックテスト 6 件、CLI パーステスト 5 件
 

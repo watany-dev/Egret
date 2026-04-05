@@ -408,9 +408,9 @@ async fn attempt_restart(
                 tracing::warn!(container = %name, error = %e, "Restart failed (stop/remove)");
                 // old_id still exists in runtime; leave unchanged and retry.
             }
-            RestartOutcome::RemovedButNotCreated(e) => {
+            RestartOutcome::CreateFailed(e) => {
                 tracing::warn!(container = %name, error = %e, "Restart failed (create/start)");
-                // Old container was removed; switch to create-only path.
+                // No container left in the runtime; stay on the create-only path.
                 old_id = None;
             }
         }

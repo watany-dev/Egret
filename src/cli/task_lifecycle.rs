@@ -128,11 +128,13 @@ pub async fn start_metadata_server(
 pub enum RestartOutcome {
     /// Old container removed and replaced by a new one with the returned ID.
     Replaced { new_id: String },
-    /// Old container was removed but creating the new one failed. The caller
-    /// should drop this container from the active list and retry at next
-    /// backoff (create-only path).
-    RemovedButNotCreated(anyhow::Error),
-    /// Failed before old container was removed (still present in the runtime).
+    /// Creating or starting the new container failed, and no container is
+    /// left in the runtime (either the old one was already removed, or
+    /// there was no old container to begin with on the create-only path).
+    /// The caller should retain `old_id = None` and retry at next backoff.
+    CreateFailed(anyhow::Error),
+    /// Failed before the old container was removed (still present in the
+    /// runtime); the caller should keep the existing `old_id` and retry.
     FailedBeforeRemoval(anyhow::Error),
 }
 
@@ -175,7 +177,7 @@ pub async fn restart_container(
 
     let new_id = match client.create_container(config).await {
         Ok(id) => id,
-        Err(e) => return RestartOutcome::RemovedButNotCreated(e.into()),
+        Err(e) => return RestartOutcome::CreateFailed(e.into()),
     };
 
     event_sink.emit(&LifecycleEvent::new(
@@ -188,7 +190,7 @@ pub async fn restart_container(
     if let Err(e) = client.start_container(&new_id).await {
         // Container was created but not started — clean it up.
         let _ = client.remove_container(&new_id).await;
-        return RestartOutcome::RemovedButNotCreated(e.into());
+        return RestartOutcome::CreateFailed(e.into());
     }
 
     event_sink.emit(&LifecycleEvent::new(
@@ -694,7 +696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restart_container_removed_but_not_created_when_create_fails() {
+    async fn restart_container_create_failed_when_create_fails() {
         use crate::events::CollectingEventSink;
 
         let mock = MockContainerClient {
@@ -711,11 +713,11 @@ mod tests {
         let outcome =
             restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
 
-        assert!(matches!(outcome, RestartOutcome::RemovedButNotCreated(_)));
+        assert!(matches!(outcome, RestartOutcome::CreateFailed(_)));
     }
 
     #[tokio::test]
-    async fn restart_container_removed_but_not_created_when_start_fails() {
+    async fn restart_container_create_failed_when_start_fails() {
         use crate::events::CollectingEventSink;
 
         let mock = MockContainerClient {
@@ -733,7 +735,7 @@ mod tests {
         let outcome =
             restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
 
-        assert!(matches!(outcome, RestartOutcome::RemovedButNotCreated(_)));
+        assert!(matches!(outcome, RestartOutcome::CreateFailed(_)));
     }
 
     #[tokio::test]
