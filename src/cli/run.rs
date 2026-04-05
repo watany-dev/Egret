@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -6,10 +6,15 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 
 use super::RunArgs;
-use super::task_lifecycle::{cleanup, run_task, start_metadata_server};
+use super::task_lifecycle::{
+    RestartOutcome, cleanup, restart_container, run_task, start_metadata_server,
+};
 use crate::container::ContainerClient;
-use crate::events::{EventSink, NullEventSink};
-use crate::metadata;
+use crate::events::{EventSink, EventType, LifecycleEvent, NullEventSink};
+use crate::metadata::{self, SharedState};
+use crate::orchestrator::{
+    EssentialExit, OrchestratorError, RestartPolicy, RestartTracker, watch_essential_exit,
+};
 use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
 /// Execute the `run` subcommand.
@@ -56,6 +61,27 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     } else {
         Box::new(NullEventSink)
     };
+
+    // Service mode: auto-restart, long-running until Ctrl+C.
+    if args.service {
+        let result = run_service_loop(
+            &client,
+            &task_def,
+            metadata_port,
+            auth_token.as_deref(),
+            metadata_state.as_ref(),
+            &*event_sink,
+            args.restart.into(),
+            args.max_restarts,
+        )
+        .await;
+
+        if let Some(server) = metadata_server {
+            server.shutdown().await;
+        }
+        return result;
+    }
+
     let (network_name, containers) = run_task(
         &*client,
         &task_def,
@@ -89,6 +115,304 @@ pub async fn execute(args: &RunArgs, host: Option<&str>) -> Result<()> {
     .await;
 
     Ok(())
+}
+
+/// Spawn a background watcher that sends an `EssentialExit` on the channel
+/// when the container with the given id exits.
+#[cfg(not(tarpaulin_include))]
+fn spawn_essential_watcher(
+    client: Arc<ContainerClient>,
+    id: String,
+    name: String,
+    tx: tokio::sync::mpsc::UnboundedSender<EssentialExit>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let exit = watch_essential_exit(&*client, &id, &name).await;
+        let _ = tx.send(exit);
+    })
+}
+
+/// Spawn a background log streamer that prints formatted lines to stdout until
+/// the stream closes or the task is aborted.
+#[cfg(not(tarpaulin_include))]
+#[allow(clippy::print_stdout)]
+fn spawn_log_stream(
+    client: Arc<ContainerClient>,
+    id: String,
+    name: String,
+    color: String,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut stream = client.stream_logs(&id, true);
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(line) => println!("{}", format_log_line(&name, &line, &color)),
+                Err(e) => {
+                    tracing::warn!(container = %name, error = %e, "Log stream error");
+                    break;
+                }
+            }
+        }
+    })
+}
+
+/// Run the task in service mode: auto-restart containers, long-running until
+/// Ctrl+C or max restarts exceeded.
+///
+/// Monitors essential containers via dedicated watcher tasks that forward
+/// exits through an mpsc channel. On each exit, the container's
+/// `RestartTracker` determines whether to restart (with exponential backoff)
+/// or to give up. Non-essential containers are not restarted; their log
+/// streams naturally terminate on exit.
+#[cfg(not(tarpaulin_include))]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn run_service_loop(
+    client: &Arc<ContainerClient>,
+    task_def: &TaskDefinition,
+    metadata_port: Option<u16>,
+    auth_token: Option<&str>,
+    metadata_state: Option<&SharedState>,
+    event_sink: &dyn EventSink,
+    restart_policy: RestartPolicy,
+    max_restarts: u32,
+) -> Result<()> {
+    // 1. Initial startup via standard orchestration path.
+    let (network_name, started_containers) =
+        run_task(&**client, task_def, metadata_port, auth_token, event_sink).await?;
+
+    // Update metadata container IDs.
+    if let Some(state) = metadata_state {
+        for (id, name) in &started_containers {
+            metadata::update_container_id(state, name, id).await;
+        }
+    }
+
+    // 2. Index container configs and trackers by name.
+    let configs: HashMap<String, crate::container::ContainerConfig> = task_def
+        .container_definitions
+        .iter()
+        .map(|def| {
+            let config = super::task_lifecycle::build_container_config(
+                &task_def.family,
+                def,
+                &network_name,
+                metadata_port,
+                &task_def.volumes,
+                auth_token,
+            );
+            (def.name.clone(), config)
+        })
+        .collect();
+
+    let essential_names: HashSet<String> = task_def
+        .container_definitions
+        .iter()
+        .filter(|d| d.essential)
+        .map(|d| d.name.clone())
+        .collect();
+
+    let mut trackers: HashMap<String, RestartTracker> = essential_names
+        .iter()
+        .map(|name| {
+            (
+                name.clone(),
+                RestartTracker::new(restart_policy, max_restarts),
+            )
+        })
+        .collect();
+
+    // 3. Track current container IDs by name (mutable as containers restart).
+    let mut id_by_name: HashMap<String, String> = started_containers
+        .iter()
+        .map(|(id, name)| (name.clone(), id.clone()))
+        .collect();
+
+    // 4. Spawn log streams and essential watchers.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EssentialExit>();
+    let mut log_handles: HashMap<String, JoinHandle<()>> = HashMap::new();
+    let mut watcher_handles: HashMap<String, JoinHandle<()>> = HashMap::new();
+
+    for (i, (id, name)) in started_containers.iter().enumerate() {
+        let color = container_color(i).to_string();
+        log_handles.insert(
+            name.clone(),
+            spawn_log_stream(Arc::clone(client), id.clone(), name.clone(), color),
+        );
+        if essential_names.contains(name) {
+            watcher_handles.insert(
+                name.clone(),
+                spawn_essential_watcher(Arc::clone(client), id.clone(), name.clone(), tx.clone()),
+            );
+        }
+    }
+
+    // Drop our tx clone so that if all watchers exit without restart, rx closes.
+    // (We still need a handle for respawning on restart, so keep the original.)
+    let result: Result<()> = loop {
+        tokio::select! {
+            Some(exit) = rx.recv() => {
+                let name = exit.container_name.clone();
+                let Some(tracker) = trackers.get_mut(&name) else {
+                    // Non-essential (should not happen as we only spawn watchers for essential).
+                    continue;
+                };
+
+                if !tracker.should_restart(exit.exit_code) {
+                    // Either policy=None, max_restarts reached, or OnFailure with exit 0.
+                    if tracker.restart_count() >= tracker.max_restarts() {
+                        event_sink.emit(&LifecycleEvent::new(
+                            EventType::MaxRestartsExceeded,
+                            &task_def.family,
+                            Some(&name),
+                            Some(&format!("exit code: {}", exit.exit_code)),
+                        ));
+                        break Err(OrchestratorError::MaxRestartsExceeded(
+                            name,
+                            tracker.max_restarts(),
+                        )
+                        .into());
+                    }
+                    event_sink.emit(&LifecycleEvent::new(
+                        EventType::Exited,
+                        &task_def.family,
+                        Some(&name),
+                        Some(&format!("exit code: {}", exit.exit_code)),
+                    ));
+                    break Ok(());
+                }
+
+                // Backoff, then try restart (with retries on failure).
+                match attempt_restart(
+                    client,
+                    &name,
+                    id_by_name.get(&name).cloned(),
+                    &configs[&name],
+                    metadata_state,
+                    event_sink,
+                    &task_def.family,
+                    tracker,
+                )
+                .await
+                {
+                    Ok(new_id) => {
+                        id_by_name.insert(name.clone(), new_id.clone());
+                        // Respawn log stream and watcher for the new container.
+                        if let Some(h) = log_handles.remove(&name) {
+                            h.abort();
+                        }
+                        log_handles.insert(
+                            name.clone(),
+                            spawn_log_stream(
+                                Arc::clone(client),
+                                new_id.clone(),
+                                name.clone(),
+                                container_color(log_handles.len()).to_string(),
+                            ),
+                        );
+                        watcher_handles.insert(
+                            name.clone(),
+                            spawn_essential_watcher(
+                                Arc::clone(client),
+                                new_id,
+                                name.clone(),
+                                tx.clone(),
+                            ),
+                        );
+                    }
+                    Err(err) => {
+                        event_sink.emit(&LifecycleEvent::new(
+                            EventType::MaxRestartsExceeded,
+                            &task_def.family,
+                            Some(&name),
+                            None,
+                        ));
+                        break Err(err);
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received SIGINT, shutting down service mode...");
+                break Ok(());
+            }
+        }
+    };
+
+    // 5. Shutdown: abort watchers/streams, then cleanup containers.
+    for h in watcher_handles.values() {
+        h.abort();
+    }
+    for h in log_handles.values() {
+        h.abort();
+    }
+
+    // Build final containers list (current IDs) for cleanup.
+    let final_containers: Vec<(String, String)> = id_by_name
+        .into_iter()
+        .map(|(name, id)| (id, name))
+        .collect();
+    cleanup(
+        &**client,
+        &final_containers,
+        &network_name,
+        event_sink,
+        &task_def.family,
+    )
+    .await;
+
+    result
+}
+
+/// Attempt to restart a container, retrying on intermediate failures until
+/// `max_restarts` is exceeded. Returns the new container ID on success.
+#[cfg(not(tarpaulin_include))]
+#[allow(clippy::too_many_arguments)]
+async fn attempt_restart(
+    client: &Arc<ContainerClient>,
+    name: &str,
+    mut old_id: Option<String>,
+    config: &crate::container::ContainerConfig,
+    metadata_state: Option<&SharedState>,
+    event_sink: &dyn EventSink,
+    family: &str,
+    tracker: &mut RestartTracker,
+) -> Result<String> {
+    loop {
+        let backoff = tracker.next_backoff();
+        tracing::info!(container = %name, backoff_secs = backoff.as_secs(), "Backing off before restart");
+        tokio::time::sleep(backoff).await;
+        tracker.record_restart();
+
+        match restart_container(
+            &**client,
+            name,
+            old_id.as_deref(),
+            config,
+            metadata_state,
+            event_sink,
+            family,
+        )
+        .await
+        {
+            RestartOutcome::Replaced { new_id } => return Ok(new_id),
+            RestartOutcome::FailedBeforeRemoval(e) => {
+                tracing::warn!(container = %name, error = %e, "Restart failed (stop/remove)");
+                // old_id still exists in runtime; leave unchanged and retry.
+            }
+            RestartOutcome::RemovedButNotCreated(e) => {
+                tracing::warn!(container = %name, error = %e, "Restart failed (create/start)");
+                // Old container was removed; switch to create-only path.
+                old_id = None;
+            }
+        }
+
+        if tracker.restart_count() >= tracker.max_restarts() {
+            return Err(OrchestratorError::MaxRestartsExceeded(
+                name.to_string(),
+                tracker.max_restarts(),
+            )
+            .into());
+        }
+    }
 }
 
 /// ANSI color codes for log multiplexing (12 distinct colors).
@@ -553,5 +877,82 @@ mod tests {
             }
             _ => panic!("expected Run command"),
         }
+    }
+
+    #[test]
+    fn parse_run_with_service_flag() {
+        let cli = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--service"])
+            .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.service);
+                // Default restart policy is on-failure
+                assert!(matches!(
+                    args.restart,
+                    crate::cli::RestartPolicyArg::OnFailure
+                ));
+                assert_eq!(args.max_restarts, 10);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_service_with_custom_policy_and_max() {
+        let cli = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "-f",
+            "task.json",
+            "--service",
+            "--restart",
+            "always",
+            "--max-restarts",
+            "5",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert!(args.service);
+                assert!(matches!(args.restart, crate::cli::RestartPolicyArg::Always));
+                assert_eq!(args.max_restarts, 5);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_service_conflicts_with_dry_run() {
+        let result =
+            Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--service", "--dry-run"]);
+        assert!(
+            result.is_err(),
+            "expected --service and --dry-run to conflict"
+        );
+    }
+
+    #[test]
+    fn parse_run_restart_without_service_fails() {
+        // --restart requires --service
+        let result = Cli::try_parse_from(["lecs", "run", "-f", "task.json", "--restart", "always"]);
+        assert!(result.is_err(), "--restart without --service should fail");
+    }
+
+    #[test]
+    fn restart_policy_arg_converts_to_orchestrator_policy() {
+        use crate::cli::RestartPolicyArg;
+        use crate::orchestrator::RestartPolicy;
+        assert_eq!(
+            RestartPolicy::from(RestartPolicyArg::None),
+            RestartPolicy::None
+        );
+        assert_eq!(
+            RestartPolicy::from(RestartPolicyArg::OnFailure),
+            RestartPolicy::OnFailure
+        );
+        assert_eq!(
+            RestartPolicy::from(RestartPolicyArg::Always),
+            RestartPolicy::Always
+        );
     }
 }

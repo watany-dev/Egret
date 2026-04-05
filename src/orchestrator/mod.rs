@@ -509,7 +509,6 @@ pub async fn wait_for_condition(
 }
 
 /// Result of an essential container exiting.
-#[allow(dead_code)]
 pub struct EssentialExit {
     pub container_name: String,
     pub exit_code: i64,
@@ -519,7 +518,6 @@ pub struct EssentialExit {
 ///
 /// Intended to be spawned via `tokio::spawn` and combined with `tokio::select!`
 /// alongside Ctrl+C signal handling.
-#[allow(dead_code)]
 pub async fn watch_essential_exit(
     client: &(impl ContainerRuntime + ?Sized),
     id: &str,
