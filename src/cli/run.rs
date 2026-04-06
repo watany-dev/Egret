@@ -7,7 +7,7 @@ use tokio::task::JoinHandle;
 
 use super::RunArgs;
 use super::task_lifecycle::{
-    RestartOutcome, cleanup, restart_container, run_task, start_metadata_server,
+    RestartContext, RestartOutcome, cleanup, restart_container, run_task, start_metadata_server,
 };
 use crate::container::ContainerClient;
 use crate::credentials::CredentialRefresher;
@@ -290,15 +290,16 @@ pub async fn run_service_loop(
                 }
 
                 // Backoff, then try restart (with retries on failure).
+                let restart_ctx = RestartContext {
+                    metadata_state,
+                    event_sink,
+                    family: &task_def.family,
+                };
                 match attempt_restart(
                     client,
                     &name,
                     id_by_name.get(&name).cloned(),
-                    &configs[&name],
-                    metadata_state,
-                    event_sink,
-                    &task_def.family,
-                    tracker,
+                    (&configs[&name], &restart_ctx, tracker),
                 )
                 .await
                 {
@@ -376,34 +377,24 @@ pub async fn run_service_loop(
 /// Attempt to restart a container, retrying on intermediate failures until
 /// `max_restarts` is exceeded. Returns the new container ID on success.
 #[cfg(not(tarpaulin_include))]
-#[allow(clippy::too_many_arguments)]
 async fn attempt_restart(
     client: &Arc<ContainerClient>,
     name: &str,
     mut old_id: Option<String>,
-    config: &crate::container::ContainerConfig,
-    metadata_state: Option<&SharedState>,
-    event_sink: &dyn EventSink,
-    family: &str,
-    tracker: &mut RestartTracker,
+    restart: (
+        &crate::container::ContainerConfig,
+        &RestartContext<'_>,
+        &mut RestartTracker,
+    ),
 ) -> Result<String> {
+    let (config, ctx, tracker) = restart;
     loop {
         let backoff = tracker.next_backoff();
         tracing::info!(container = %name, backoff_secs = backoff.as_secs(), "Backing off before restart");
         tokio::time::sleep(backoff).await;
         tracker.record_restart();
 
-        match restart_container(
-            &**client,
-            name,
-            old_id.as_deref(),
-            config,
-            metadata_state,
-            event_sink,
-            family,
-        )
-        .await
-        {
+        match restart_container(&**client, name, old_id.as_deref(), config, ctx).await {
             RestartOutcome::Replaced { new_id } => return Ok(new_id),
             RestartOutcome::FailedBeforeRemoval(e) => {
                 tracing::warn!(container = %name, error = %e, "Restart failed (stop/remove)");

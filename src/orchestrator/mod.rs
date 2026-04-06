@@ -11,7 +11,6 @@ use crate::taskdef::{DependencyCondition, DependsOn, HealthCheck};
 
 /// Orchestrator errors.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum OrchestratorError {
     #[error("cyclic dependency detected: {0}")]
     CyclicDependency(String),
@@ -21,9 +20,6 @@ pub enum OrchestratorError {
 
     #[error("condition not met for container '{0}': {1}")]
     ConditionNotMet(String, String),
-
-    #[error("essential container '{0}' exited with code {1}")]
-    EssentialContainerFailed(String, i64),
 
     #[error("health check timed out for container '{0}'")]
     HealthCheckTimeout(String),
@@ -35,14 +31,9 @@ pub enum OrchestratorError {
 /// Maximum backoff duration between container restart attempts (5 minutes).
 const MAX_BACKOFF_SECS: u64 = 300;
 
-/// Default maximum restart attempts before giving up.
-#[allow(dead_code)]
-pub const DEFAULT_MAX_RESTARTS: u32 = 10;
-
 /// Container restart policy for service mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum RestartPolicy {
     /// Do not restart (default, task-runner behavior).
     #[default]
@@ -55,14 +46,12 @@ pub enum RestartPolicy {
 
 /// Tracks restart state for a single container.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct RestartTracker {
     policy: RestartPolicy,
     restart_count: u32,
     max_restarts: u32,
 }
 
-#[allow(dead_code)]
 impl RestartTracker {
     /// Create a new restart tracker with the given policy and maximum restart count.
     #[must_use]
@@ -107,21 +96,10 @@ impl RestartTracker {
         self.restart_count = self.restart_count.saturating_add(1);
     }
 
-    /// Reset the counter (e.g. after the container has stabilized).
-    pub const fn reset(&mut self) {
-        self.restart_count = 0;
-    }
-
     /// Return the current restart count.
     #[must_use]
     pub const fn restart_count(&self) -> u32 {
         self.restart_count
-    }
-
-    /// Return the restart policy.
-    #[must_use]
-    pub const fn policy(&self) -> RestartPolicy {
-        self.policy
     }
 
     /// Return the configured maximum restart count.
@@ -302,7 +280,7 @@ pub struct ContainerSpec {
     pub config: crate::container::ContainerConfig,
     pub depends_on: Vec<DependsOn>,
     pub health_check: Option<HealthCheck>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Part of ECS task definition contract
     pub essential: bool,
 }
 
@@ -708,21 +686,8 @@ mod tests {
     }
 
     #[test]
-    fn reset_clears_counter() {
-        let mut tracker = RestartTracker::new(RestartPolicy::Always, 10);
-        tracker.record_restart();
-        tracker.record_restart();
-        tracker.record_restart();
-        assert_eq!(tracker.restart_count(), 3);
-        tracker.reset();
-        assert_eq!(tracker.restart_count(), 0);
-        assert!(tracker.should_restart(1));
-    }
-
-    #[test]
-    fn tracker_exposes_policy_and_max() {
+    fn tracker_exposes_max() {
         let tracker = RestartTracker::new(RestartPolicy::OnFailure, 5);
-        assert_eq!(tracker.policy(), RestartPolicy::OnFailure);
         assert_eq!(tracker.max_restarts(), 5);
     }
 
@@ -1116,10 +1081,6 @@ mod tests {
 
         let err = OrchestratorError::ConditionNotMet("app".to_string(), "timeout".to_string());
         assert!(err.to_string().contains("app"));
-
-        let err = OrchestratorError::EssentialContainerFailed("web".to_string(), 137);
-        assert!(err.to_string().contains("web"));
-        assert!(err.to_string().contains("137"));
 
         let err = OrchestratorError::HealthCheckTimeout("db".to_string());
         assert!(err.to_string().contains("db"));

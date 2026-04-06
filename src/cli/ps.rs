@@ -194,25 +194,16 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn container_info_full(
+    fn container_info_with(
         name: &str,
         image: &str,
         state: &str,
         family: &str,
-        health: Option<&str>,
-        ports: Vec<PortInfo>,
+        overrides: impl FnOnce(&mut ContainerInfo),
     ) -> ContainerInfo {
-        ContainerInfo {
-            id: format!("{name}-id"),
-            name: name.to_string(),
-            image: image.to_string(),
-            family: family.to_string(),
-            state: state.to_string(),
-            health_status: health.map(String::from),
-            ports,
-            started_at: None,
-        }
+        let mut info = container_info(name, image, state, family);
+        overrides(&mut info);
+        info
     }
 
     #[test]
@@ -252,17 +243,19 @@ mod tests {
 
     #[test]
     fn format_table_with_health_and_ports() {
-        let containers = vec![container_info_full(
+        let containers = vec![container_info_with(
             "web",
             "nginx:latest",
             "running",
             "my-app",
-            Some("healthy"),
-            vec![PortInfo {
-                host_port: Some(8080),
-                container_port: 80,
-                protocol: "tcp".to_string(),
-            }],
+            |info| {
+                info.health_status = Some("healthy".to_string());
+                info.ports = vec![PortInfo {
+                    host_port: Some(8080),
+                    container_port: 80,
+                    protocol: "tcp".to_string(),
+                }];
+            },
         )];
         let table = format_table(&containers);
         assert!(table.contains("healthy"));
@@ -280,17 +273,19 @@ mod tests {
 
     #[test]
     fn format_json_output() {
-        let containers = vec![container_info_full(
+        let containers = vec![container_info_with(
             "web",
             "nginx:latest",
             "running",
             "my-app",
-            Some("healthy"),
-            vec![PortInfo {
-                host_port: Some(8080),
-                container_port: 80,
-                protocol: "tcp".to_string(),
-            }],
+            |info| {
+                info.health_status = Some("healthy".to_string());
+                info.ports = vec![PortInfo {
+                    host_port: Some(8080),
+                    container_port: 80,
+                    protocol: "tcp".to_string(),
+                }];
+            },
         )];
         let json = format_json(&containers);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
