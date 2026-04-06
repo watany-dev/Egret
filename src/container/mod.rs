@@ -22,13 +22,6 @@ pub enum ContainerError {
 
     #[error("Container runtime API error: {0}")]
     Api(#[from] bollard::errors::Error),
-
-    #[allow(dead_code)]
-    #[error("exec failed on container {container_id}: {detail}")]
-    ExecFailed {
-        container_id: String,
-        detail: String,
-    },
 }
 
 /// Abstraction over container runtime operations for testability.
@@ -74,7 +67,6 @@ pub trait ContainerRuntime: Send + Sync {
     async fn wait_container(&self, id: &str) -> Result<WaitResult, ContainerError>;
 
     /// Get a single snapshot of resource usage statistics for a container.
-    #[allow(dead_code)]
     async fn stats_container(&self, id: &str) -> Result<ContainerStats, ContainerError>;
 
     /// Execute a command inside a running container.
@@ -163,7 +155,6 @@ pub struct PortMappingConfig {
 
 /// Port information for a running container.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PortInfo {
     pub host_port: Option<u16>,
     pub container_port: u16,
@@ -171,7 +162,6 @@ pub struct PortInfo {
 }
 
 /// Resource usage statistics for a container.
-#[allow(dead_code)]
 pub struct ContainerStats {
     pub cpu_percent: f64,
     pub memory_usage: u64,
@@ -191,42 +181,34 @@ pub struct ContainerInfo {
     pub family: String,
     pub state: String,
     /// Health check status (e.g., "healthy", "unhealthy", "starting").
-    #[allow(dead_code)]
     pub health_status: Option<String>,
     /// Port mappings for the container.
-    #[allow(dead_code)]
     pub ports: Vec<PortInfo>,
     /// ISO 8601 timestamp when the container was started.
-    #[allow(dead_code)]
     pub started_at: Option<String>,
 }
 
 /// Information about an Lecs-managed network.
 pub struct NetworkInfo {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Populated by Docker API; retained for API completeness
     pub id: String,
     pub name: String,
 }
 
 /// Result of inspecting a container.
 pub struct ContainerInspection {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Populated by Docker API; retained for API completeness
     pub id: String,
     pub state: ContainerState,
     /// Container image name.
-    #[allow(dead_code)]
     pub image: String,
     /// Environment variables set on the container.
-    #[allow(dead_code)]
     pub env: Vec<String>,
     /// Network name the container is attached to.
-    #[allow(dead_code)]
     pub network_name: Option<String>,
     /// Port mappings for the container.
-    #[allow(dead_code)]
     pub ports: Vec<PortInfo>,
     /// ISO 8601 timestamp when the container was started.
-    #[allow(dead_code)]
     pub started_at: Option<String>,
     /// Container labels.
     pub labels: HashMap<String, String>,
@@ -235,13 +217,12 @@ pub struct ContainerInspection {
 /// Container state from inspection.
 pub struct ContainerState {
     /// Status string (e.g., "running", "exited").
-    #[allow(dead_code)]
     pub status: String,
     /// Whether the container is running.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Populated by Docker API; retained for API completeness
     pub running: bool,
     /// Exit code (if exited).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Populated by Docker API; retained for API completeness
     pub exit_code: Option<i64>,
     /// Health check status (e.g., "healthy", "unhealthy", "starting").
     pub health_status: Option<String>,

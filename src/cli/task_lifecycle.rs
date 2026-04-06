@@ -122,9 +122,18 @@ pub async fn start_metadata_server(
     Ok((server, state))
 }
 
+/// Shared context for restart operations, grouping metadata/event/family state.
+pub struct RestartContext<'a> {
+    /// Shared metadata state (None if metadata is disabled).
+    pub metadata_state: Option<&'a SharedState>,
+    /// Event sink for lifecycle events.
+    pub event_sink: &'a dyn EventSink,
+    /// Task family name.
+    pub family: &'a str,
+}
+
 /// Result of attempting to restart a single container.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum RestartOutcome {
     /// Old container removed and replaced by a new one with the returned ID.
     Replaced { new_id: String },
@@ -147,19 +156,16 @@ pub enum RestartOutcome {
 ///
 /// If `old_id` is `None`, the stop/remove phase is skipped (create-only retry
 /// path, used after a previous attempt that left no old container behind).
-#[allow(dead_code, clippy::too_many_arguments)]
 pub async fn restart_container(
     client: &(impl ContainerRuntime + ?Sized),
     container_name: &str,
     old_id: Option<&str>,
     config: &crate::container::ContainerConfig,
-    metadata_state: Option<&SharedState>,
-    event_sink: &dyn EventSink,
-    family: &str,
+    ctx: &RestartContext<'_>,
 ) -> RestartOutcome {
-    event_sink.emit(&LifecycleEvent::new(
+    ctx.event_sink.emit(&LifecycleEvent::new(
         EventType::Restarting,
-        family,
+        ctx.family,
         Some(container_name),
         None,
     ));
@@ -180,9 +186,9 @@ pub async fn restart_container(
         Err(e) => return RestartOutcome::CreateFailed(e.into()),
     };
 
-    event_sink.emit(&LifecycleEvent::new(
+    ctx.event_sink.emit(&LifecycleEvent::new(
         EventType::Created,
-        family,
+        ctx.family,
         Some(container_name),
         None,
     ));
@@ -193,14 +199,14 @@ pub async fn restart_container(
         return RestartOutcome::CreateFailed(e.into());
     }
 
-    event_sink.emit(&LifecycleEvent::new(
+    ctx.event_sink.emit(&LifecycleEvent::new(
         EventType::Started,
-        family,
+        ctx.family,
         Some(container_name),
         None,
     ));
 
-    if let Some(state) = metadata_state {
+    if let Some(state) = ctx.metadata_state {
         metadata::update_container_id(state, container_name, &new_id).await;
     }
 
@@ -268,34 +274,22 @@ fn resolve_binds(mount_points: &[MountPoint], volumes: &[Volume]) -> Vec<String>
         .collect()
 }
 
-/// Build a container configuration from a task definition container.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub fn build_container_config(
-    family: &str,
-    def: &ContainerDefinition,
-    network: &str,
-    metadata_port: Option<u16>,
-    volumes: &[Volume],
-    auth_token: Option<&str>,
-) -> ContainerConfig {
-    // Start with user-defined docker labels, then override with lecs management labels
+/// Build container labels from the task definition.
+fn build_container_labels(family: &str, def: &ContainerDefinition) -> HashMap<String, String> {
     let mut labels: HashMap<String, String> = def.docker_labels.clone();
     labels.insert(crate::labels::MANAGED.into(), "true".into());
     labels.insert(crate::labels::TASK.into(), family.into());
     labels.insert(crate::labels::CONTAINER.into(), def.name.clone());
 
-    // Store secret names for inspect masking
     if !def.secrets.is_empty() {
         let secret_names: Vec<String> = def.secrets.iter().map(|s| s.name.clone()).collect();
         labels.insert(crate::labels::SECRETS.into(), secret_names.join(","));
     }
 
-    // Store stop timeout for cleanup
     if let Some(timeout) = def.stop_timeout {
         labels.insert(crate::labels::STOP_TIMEOUT.into(), timeout.to_string());
     }
 
-    // Store dependency info for ps display
     if !def.depends_on.is_empty() {
         let deps: Vec<String> = def
             .depends_on
@@ -305,6 +299,15 @@ pub fn build_container_config(
         labels.insert(crate::labels::DEPENDS_ON.into(), deps.join(","));
     }
 
+    labels
+}
+
+/// Build environment variables, injecting ECS metadata/credential URIs when metadata is enabled.
+fn build_container_env(
+    def: &ContainerDefinition,
+    metadata_port: Option<u16>,
+    auth_token: Option<&str>,
+) -> Vec<String> {
     let mut env: Vec<String> = def
         .environment
         .iter()
@@ -324,53 +327,86 @@ pub fn build_container_config(
         }
     }
 
-    let port_mappings = def
-        .port_mappings
+    env
+}
+
+/// Convert an ECS health check definition to the container runtime format.
+fn build_health_check_config(hc: &crate::taskdef::HealthCheck) -> HealthCheckConfig {
+    const NANOS_PER_SEC: i64 = 1_000_000_000;
+    HealthCheckConfig {
+        test: hc.command.clone(),
+        interval_ns: i64::from(hc.interval) * NANOS_PER_SEC,
+        timeout_ns: i64::from(hc.timeout) * NANOS_PER_SEC,
+        retries: i64::from(hc.retries),
+        start_period_ns: i64::from(hc.start_period) * NANOS_PER_SEC,
+    }
+}
+
+/// Build `extra_hosts` entries, ensuring `host.docker.internal` is always present.
+fn build_extra_hosts(def: &ContainerDefinition) -> Vec<String> {
+    let mut hosts: Vec<String> = def
+        .extra_hosts
         .iter()
-        .map(|p| PortMappingConfig {
-            host_port: p.host_port.unwrap_or(p.container_port),
-            container_port: p.container_port,
-            protocol: p.protocol.clone(),
-        })
+        .map(|h| format!("{}:{}", h.hostname, h.ip_address))
         .collect();
+    if !hosts.iter().any(|h| h.starts_with("host.docker.internal:")) {
+        hosts.push("host.docker.internal:host-gateway".to_string());
+    }
+    hosts
+}
 
-    let health_check = def.health_check.as_ref().map(|hc| {
-        const NANOS_PER_SEC: i64 = 1_000_000_000;
-        HealthCheckConfig {
-            test: hc.command.clone(),
-            interval_ns: i64::from(hc.interval) * NANOS_PER_SEC,
-            timeout_ns: i64::from(hc.timeout) * NANOS_PER_SEC,
-            retries: i64::from(hc.retries),
-            start_period_ns: i64::from(hc.start_period) * NANOS_PER_SEC,
-        }
-    });
+/// Build tmpfs mount entries from Linux parameters.
+fn build_tmpfs(def: &ContainerDefinition) -> HashMap<String, String> {
+    def.linux_parameters
+        .as_ref()
+        .map(|lp| {
+            lp.tmpfs
+                .iter()
+                .map(|t| {
+                    let size_bytes = t.size * 1024 * 1024;
+                    let mut opts = format!("size={size_bytes}");
+                    for opt in &t.mount_options {
+                        opts.push(',');
+                        opts.push_str(opt);
+                    }
+                    (t.container_path.clone(), opts)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
-    let binds = resolve_binds(&def.mount_points, volumes);
-
+/// Build a container configuration from a task definition container.
+#[allow(clippy::too_many_arguments)]
+pub fn build_container_config(
+    family: &str,
+    def: &ContainerDefinition,
+    network: &str,
+    metadata_port: Option<u16>,
+    volumes: &[Volume],
+    auth_token: Option<&str>,
+) -> ContainerConfig {
     ContainerConfig {
         name: format!("{family}-{}", def.name),
         image: def.image.clone(),
         command: def.command.clone(),
         entry_point: def.entry_point.clone(),
-        env,
-        port_mappings,
+        env: build_container_env(def, metadata_port, auth_token),
+        port_mappings: def
+            .port_mappings
+            .iter()
+            .map(|p| PortMappingConfig {
+                host_port: p.host_port.unwrap_or(p.container_port),
+                container_port: p.container_port,
+                protocol: p.protocol.clone(),
+            })
+            .collect(),
         network: network.into(),
         network_aliases: vec![def.name.clone()],
-        labels,
-        extra_hosts: {
-            let mut hosts: Vec<String> = def
-                .extra_hosts
-                .iter()
-                .map(|h| format!("{}:{}", h.hostname, h.ip_address))
-                .collect();
-            // Add default host.docker.internal mapping unless user overrides it
-            if !hosts.iter().any(|h| h.starts_with("host.docker.internal:")) {
-                hosts.push("host.docker.internal:host-gateway".to_string());
-            }
-            hosts
-        },
-        health_check,
-        binds,
+        labels: build_container_labels(family, def),
+        extra_hosts: build_extra_hosts(def),
+        health_check: def.health_check.as_ref().map(build_health_check_config),
+        binds: resolve_binds(&def.mount_points, volumes),
         working_dir: def.working_directory.clone(),
         user: def.user.clone(),
         cpu_units: def.cpu,
@@ -394,24 +430,7 @@ pub fn build_container_config(
             .as_ref()
             .and_then(|lp| lp.shared_memory_size)
             .map(|mib| mib * 1024 * 1024),
-        tmpfs: def
-            .linux_parameters
-            .as_ref()
-            .map(|lp| {
-                lp.tmpfs
-                    .iter()
-                    .map(|t| {
-                        let size_bytes = t.size * 1024 * 1024;
-                        let mut opts = format!("size={size_bytes}");
-                        for opt in &t.mount_options {
-                            opts.push(',');
-                            opts.push_str(opt);
-                        }
-                        (t.container_path.clone(), opts)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+        tmpfs: build_tmpfs(def),
     }
 }
 
@@ -629,8 +648,18 @@ mod tests {
 
         let config = default_config("my-app-web");
         let sink = CollectingEventSink::new();
-        let outcome =
-            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+        let outcome = restart_container(
+            &mock,
+            "web",
+            Some("old-id"),
+            &config,
+            &RestartContext {
+                metadata_state: None,
+                event_sink: &sink,
+                family: "my-app",
+            },
+        )
+        .await;
 
         match outcome {
             RestartOutcome::Replaced { new_id } => assert_eq!(new_id, "new-id"),
@@ -669,8 +698,18 @@ mod tests {
 
         let config = default_config("my-app-web");
         let sink = CollectingEventSink::new();
-        let outcome =
-            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+        let outcome = restart_container(
+            &mock,
+            "web",
+            Some("old-id"),
+            &config,
+            &RestartContext {
+                metadata_state: None,
+                event_sink: &sink,
+                family: "my-app",
+            },
+        )
+        .await;
 
         assert!(matches!(outcome, RestartOutcome::Replaced { .. }));
     }
@@ -689,8 +728,18 @@ mod tests {
 
         let config = default_config("my-app-web");
         let sink = CollectingEventSink::new();
-        let outcome =
-            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+        let outcome = restart_container(
+            &mock,
+            "web",
+            Some("old-id"),
+            &config,
+            &RestartContext {
+                metadata_state: None,
+                event_sink: &sink,
+                family: "my-app",
+            },
+        )
+        .await;
 
         assert!(matches!(outcome, RestartOutcome::FailedBeforeRemoval(_)));
     }
@@ -710,8 +759,18 @@ mod tests {
 
         let config = default_config("my-app-web");
         let sink = CollectingEventSink::new();
-        let outcome =
-            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+        let outcome = restart_container(
+            &mock,
+            "web",
+            Some("old-id"),
+            &config,
+            &RestartContext {
+                metadata_state: None,
+                event_sink: &sink,
+                family: "my-app",
+            },
+        )
+        .await;
 
         assert!(matches!(outcome, RestartOutcome::CreateFailed(_)));
     }
@@ -732,8 +791,18 @@ mod tests {
 
         let config = default_config("my-app-web");
         let sink = CollectingEventSink::new();
-        let outcome =
-            restart_container(&mock, "web", Some("old-id"), &config, None, &sink, "my-app").await;
+        let outcome = restart_container(
+            &mock,
+            "web",
+            Some("old-id"),
+            &config,
+            &RestartContext {
+                metadata_state: None,
+                event_sink: &sink,
+                family: "my-app",
+            },
+        )
+        .await;
 
         assert!(matches!(outcome, RestartOutcome::CreateFailed(_)));
     }
@@ -751,7 +820,18 @@ mod tests {
 
         let config = default_config("my-app-web");
         let sink = CollectingEventSink::new();
-        let outcome = restart_container(&mock, "web", None, &config, None, &sink, "my-app").await;
+        let outcome = restart_container(
+            &mock,
+            "web",
+            None,
+            &config,
+            &RestartContext {
+                metadata_state: None,
+                event_sink: &sink,
+                family: "my-app",
+            },
+        )
+        .await;
 
         match outcome {
             RestartOutcome::Replaced { new_id } => assert_eq!(new_id, "fresh-id"),

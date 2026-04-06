@@ -11,20 +11,16 @@ use serde::Serialize;
 use crate::metadata::SharedState;
 
 /// Default refresh interval when TTL cannot be determined (30 minutes).
-#[allow(dead_code)]
 pub const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Minimum refresh interval to avoid excessive API calls (1 minute).
-#[allow(dead_code)]
 pub const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Maximum refresh interval ceiling (30 minutes).
-#[allow(dead_code)]
 pub const MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Credential loading errors.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum CredentialError {
     /// Failed to load credentials from the environment.
     #[error("failed to load AWS credentials: {0}")]
@@ -38,7 +34,6 @@ pub enum CredentialError {
 /// AWS credentials response format (ECS credential provider compatible).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
-#[allow(dead_code)]
 pub struct AwsCredentials {
     /// AWS access key ID.
     pub access_key_id: String,
@@ -76,7 +71,6 @@ impl std::fmt::Debug for AwsCredentials {
 /// `MIN_REFRESH_INTERVAL`. If the timestamp cannot be parsed, returns
 /// `DEFAULT_REFRESH_INTERVAL`.
 #[must_use]
-#[allow(dead_code)]
 pub fn compute_refresh_interval(expiration: &str) -> Duration {
     let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expiration) else {
         return DEFAULT_REFRESH_INTERVAL;
@@ -98,7 +92,6 @@ pub fn compute_refresh_interval(expiration: &str) -> Duration {
 /// but does **not** trigger an `AssumeRole` call — the local credentials are
 /// used directly.
 #[cfg(not(tarpaulin_include))]
-#[allow(dead_code)]
 pub async fn load_local_credentials(
     role_arn: Option<&str>,
 ) -> Result<AwsCredentials, CredentialError> {
@@ -153,7 +146,6 @@ pub async fn load_local_credentials(
 /// Periodically reloads AWS credentials from the local environment and
 /// updates the shared metadata server state. The refresh interval is
 /// computed from the credential expiration timestamp.
-#[allow(dead_code)]
 pub struct CredentialRefresher {
     state: SharedState,
     role_arn: Option<String>,
@@ -162,13 +154,11 @@ pub struct CredentialRefresher {
 impl CredentialRefresher {
     /// Create a new credential refresher.
     #[must_use]
-    #[allow(dead_code)]
     pub const fn new(state: SharedState, role_arn: Option<String>) -> Self {
         Self { state, role_arn }
     }
 
     /// Replace the credentials in the shared state.
-    #[allow(dead_code)]
     pub async fn update_state(state: &SharedState, creds: AwsCredentials) {
         let mut guard = state.write().await;
         guard.credentials = Some(creds);
@@ -182,7 +172,6 @@ impl CredentialRefresher {
     /// interval derived from the new credential's TTL;
     /// on failure, it logs a warning and sleeps for 60s before retrying.
     #[cfg(not(tarpaulin_include))]
-    #[allow(dead_code)]
     pub fn start(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {

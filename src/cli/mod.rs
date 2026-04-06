@@ -280,7 +280,7 @@ pub struct InitArgs {
 }
 
 #[derive(Parser)]
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools)] // CLI flags: each bool maps to a clap --flag
 pub struct RunArgs {
     /// Task definition source, overrides, secrets, and profile
     #[command(flatten)]

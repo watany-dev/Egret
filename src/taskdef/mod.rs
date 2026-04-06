@@ -65,14 +65,6 @@ pub enum TaskDefError {
         path: PathBuf,
         source: std::io::Error,
     },
-
-    #[allow(dead_code)]
-    #[error("invalid line in environment file {path} at line {line_number}: {detail}")]
-    EnvironmentFileParse {
-        path: PathBuf,
-        line_number: usize,
-        detail: String,
-    },
 }
 
 /// ECS task definition top-level structure.
@@ -84,12 +76,11 @@ pub struct TaskDefinition {
 
     /// IAM role ARN for the task (containers assume this role via credentials).
     #[serde(default)]
-    #[allow(dead_code)]
     pub task_role_arn: Option<String>,
 
     /// IAM role ARN for the execution agent (used for pulling images, etc.).
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from ECS JSON; retained for round-trip compatibility
     pub execution_role_arn: Option<String>,
 
     /// Task-level volume definitions.
@@ -359,7 +350,7 @@ pub struct EnvironmentFile {
     /// File type — always "s3" in ECS. Lecs ignores this field but
     /// preserves it for ECS task definition round-trip compatibility.
     #[serde(default = "default_env_file_type")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Deserialized from ECS JSON; retained for round-trip compatibility
     pub r#type: String,
 }
 

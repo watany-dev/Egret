@@ -19,19 +19,13 @@ use crate::taskdef::{ContainerDefinition, TaskDefinition};
 
 /// Metadata server errors.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum MetadataError {
     /// Failed to bind the server to a port.
     #[error("failed to bind metadata server: {0}")]
     Bind(#[source] std::io::Error),
-
-    /// Generic server error.
-    #[error("metadata server error: {0}")]
-    Server(String),
 }
 
 /// Shared state for the metadata/credentials server.
-#[allow(dead_code)]
 pub struct ServerState {
     /// Task-level metadata.
     pub task_metadata: TaskMetadata,
@@ -134,7 +128,6 @@ pub struct NetworkMetadata {
 }
 
 /// Build task-level metadata from a task definition.
-#[allow(dead_code)]
 pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
     let task_arn = format!(
         "arn:aws:ecs:local:000000000000:task/lecs/{}",
@@ -162,7 +155,6 @@ pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
 }
 
 /// Build container-level metadata from a container definition.
-#[allow(dead_code)]
 pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> ContainerMetadata {
     let docker_name = format!("{family}-{}", def.name);
     let container_arn = format!(
@@ -205,11 +197,9 @@ pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> Cont
 }
 
 /// Type alias for the shared server state.
-#[allow(dead_code)]
 pub type SharedState = Arc<RwLock<ServerState>>;
 
 /// Metadata server handle for lifecycle management.
-#[allow(dead_code)]
 pub struct MetadataServer {
     /// The port the server is listening on.
     pub port: u16,
@@ -221,7 +211,6 @@ impl MetadataServer {
     /// Start the metadata server on a random available port.
     ///
     /// Returns a handle that can be used to shut down the server.
-    #[allow(dead_code)]
     pub async fn start(state: SharedState) -> Result<Self, MetadataError> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -251,7 +240,6 @@ impl MetadataServer {
     }
 
     /// Gracefully shut down the server.
-    #[allow(dead_code)]
     pub async fn shutdown(self) {
         self.shutdown_tx.send(()).ok();
         self.handle.await.ok();
@@ -260,7 +248,6 @@ impl MetadataServer {
 }
 
 /// Update a container's Docker ID after creation.
-#[allow(dead_code)]
 pub async fn update_container_id(state: &SharedState, name: &str, docker_id: &str) {
     let mut state = state.write().await;
     state
@@ -281,7 +268,6 @@ pub async fn update_container_id(state: &SharedState, name: &str, docker_id: &st
 ///
 /// Uses the OS-provided CSPRNG via `getrandom` to produce a 128-bit
 /// cryptographically random hex token (32 hex characters).
-#[allow(dead_code)]
 pub fn generate_auth_token() -> String {
     use std::fmt::Write;
 
@@ -298,7 +284,6 @@ pub fn generate_auth_token() -> String {
 /// Maximum request body size (1 MB).
 const MAX_BODY_SIZE: usize = 1_024 * 1_024;
 
-#[allow(dead_code)]
 fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -314,12 +299,10 @@ fn build_router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-#[allow(dead_code)]
 async fn health_handler() -> StatusCode {
     StatusCode::OK
 }
 
-#[allow(dead_code)]
 async fn credentials_handler(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
@@ -341,7 +324,6 @@ async fn credentials_handler(
     )
 }
 
-#[allow(dead_code)]
 async fn container_metadata_handler(
     State(state): State<SharedState>,
     Path(container_name): Path<String>,
@@ -353,7 +335,6 @@ async fn container_metadata_handler(
     )
 }
 
-#[allow(dead_code)]
 async fn task_metadata_handler(
     State(state): State<SharedState>,
     Path(container_name): Path<String>,
@@ -370,7 +351,6 @@ async fn task_metadata_handler(
         .into_response()
 }
 
-#[allow(dead_code)]
 async fn stats_not_implemented() -> StatusCode {
     StatusCode::NOT_IMPLEMENTED
 }
@@ -549,8 +529,11 @@ mod tests {
 
     #[test]
     fn metadata_error_display() {
-        let err = MetadataError::Server("test error".to_string());
-        assert_eq!(err.to_string(), "metadata server error: test error");
+        let err = MetadataError::Bind(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "port in use",
+        ));
+        assert!(err.to_string().contains("failed to bind metadata server"));
     }
 
     // --- Server integration tests ---
