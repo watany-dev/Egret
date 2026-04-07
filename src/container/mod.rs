@@ -7,8 +7,8 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
     RemoveContainerOptions, StatsOptions, StopContainerOptions,
 };
-use bollard::image::CreateImageOptions;
 use bollard::exec::{CreateExecOptions, StartExecResults};
+use bollard::image::CreateImageOptions;
 use bollard::models::{EndpointSettings, HealthConfig, HostConfig, PortBinding, ResourcesUlimits};
 use bollard::network::{CreateNetworkOptions, ListNetworksOptions};
 use futures_util::Stream;
@@ -740,19 +740,15 @@ fn parse_image_reference(image: &str) -> (&str, &str) {
     }
 
     // Find the last '/' to isolate the name+tag portion from registry/namespace
-    let after_slash = match image.rfind('/') {
-        Some(pos) => pos + 1,
-        None => 0,
-    };
+    let after_slash = image.rfind('/').map_or(0, |pos| pos + 1);
 
     // Look for ':' in the portion after the last '/'
-    match image[after_slash..].rfind(':') {
-        Some(colon_offset) => {
+    image[after_slash..]
+        .rfind(':')
+        .map_or((image, "latest"), |colon_offset| {
             let colon_pos = after_slash + colon_offset;
             (&image[..colon_pos], &image[colon_pos + 1..])
-        }
-        None => (image, "latest"),
-    }
+        })
 }
 
 /// Calculate CPU usage percentage from a Docker stats snapshot.
