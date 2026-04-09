@@ -9,7 +9,7 @@ use std::fmt;
 use crate::orchestrator::{self, DependencyInfo};
 use crate::overrides::OverrideConfig;
 
-use super::TaskDefinition;
+use super::{NetworkMode, TaskDefinition};
 
 /// Severity level for validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +126,9 @@ pub fn validate_extended(task_def: &TaskDefinition) -> ValidationReport {
 
     // Common mistake warnings
     diagnostics.extend(check_common_mistakes(task_def));
+
+    // Network mode warnings
+    diagnostics.extend(check_network_mode(task_def));
 
     ValidationReport { diagnostics }
 }
@@ -393,6 +396,52 @@ fn check_port_conflicts(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> 
                 });
             } else {
                 seen.insert(key, (ci, pi, container.name.clone()));
+            }
+        }
+    }
+
+    diagnostics
+}
+
+/// Check network mode for local-specific warnings.
+fn check_network_mode(task_def: &TaskDefinition) -> Vec<ValidationDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    let effective = task_def.network_mode.effective();
+    if task_def.network_mode == NetworkMode::Awsvpc {
+        diagnostics.push(ValidationDiagnostic {
+            severity: Severity::Warning,
+            field_path: "networkMode".to_string(),
+            message: format!(
+                "awsvpc network mode will be treated as {} locally",
+                effective.as_str()
+            ),
+            suggestion: Some(
+                "this is expected; lecs uses a dedicated bridge network as the local equivalent"
+                    .to_string(),
+            ),
+        });
+    }
+
+    if task_def.network_mode == NetworkMode::Host {
+        // In host mode, container port == host port (forced by ECS).
+        for (ci, container) in task_def.container_definitions.iter().enumerate() {
+            for (pi, pm) in container.port_mappings.iter().enumerate() {
+                if let Some(hp) = pm.host_port
+                    && hp != pm.container_port
+                {
+                    diagnostics.push(ValidationDiagnostic {
+                        severity: Severity::Warning,
+                        field_path: format!(
+                            "containerDefinitions[{ci}].portMappings[{pi}]"
+                        ),
+                        message: format!(
+                            "hostPort ({hp}) differs from containerPort ({}); in host network mode, ECS ignores hostPort and uses containerPort directly",
+                            pm.container_port
+                        ),
+                        suggestion: Some("remove hostPort or set it equal to containerPort".to_string()),
+                    });
+                }
             }
         }
     }
@@ -1101,6 +1150,7 @@ mod tests {
 
     mod pbt {
         use super::*;
+        use crate::taskdef::NetworkMode;
         use proptest::prelude::*;
 
         /// Generate a valid Docker image name: alphanumeric start, no whitespace,
@@ -1132,6 +1182,7 @@ mod tests {
             use crate::taskdef::*;
             TaskDefinition {
                 family: "test".into(),
+                network_mode: NetworkMode::Bridge,
                 task_role_arn: None,
                 execution_role_arn: None,
                 volumes: vec![],
@@ -1312,6 +1363,7 @@ mod tests {
                 let arn = format!("arn:aws:secretsmanager:{region}:{account}:secret:{name}");
                 let td = TaskDefinition {
                     family: "test".into(),
+                    network_mode: NetworkMode::Bridge,
                     task_role_arn: None,
                     execution_role_arn: None,
                     volumes: vec![],
@@ -1344,6 +1396,7 @@ mod tests {
                     .collect();
                 let td = TaskDefinition {
                     family,
+                    network_mode: NetworkMode::Bridge,
                     task_role_arn: None,
                     execution_role_arn: None,
                     volumes: vec![],

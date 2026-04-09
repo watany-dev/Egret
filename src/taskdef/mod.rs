@@ -90,12 +90,58 @@ pub enum TaskDefError {
     },
 }
 
+/// ECS network mode for a task definition.
+///
+/// Determines how containers in the task connect to each other and to the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NetworkMode {
+    /// Each task gets its own Docker bridge network (default for ECS on EC2).
+    #[default]
+    Bridge,
+    /// Containers share the host's network namespace.
+    Host,
+    /// Containers have no external network connectivity.
+    None,
+    /// AWS VPC networking (ECS Fargate default). Locally mapped to bridge.
+    Awsvpc,
+}
+
+impl NetworkMode {
+    /// Return the effective local network mode.
+    ///
+    /// `Awsvpc` is mapped to `Bridge` because the AWS-specific ENI attachment
+    /// cannot be replicated locally; a dedicated bridge network is equivalent.
+    #[must_use]
+    pub const fn effective(&self) -> &Self {
+        match self {
+            Self::Awsvpc => &Self::Bridge,
+            other => other,
+        }
+    }
+
+    /// String representation matching the ECS metadata format.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Bridge => "bridge",
+            Self::Host => "host",
+            Self::None => "none",
+            Self::Awsvpc => "awsvpc",
+        }
+    }
+}
+
 /// ECS task definition top-level structure.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDefinition {
     /// Task family name (used for network name and labels).
     pub family: String,
+
+    /// Network mode for the task (bridge, host, none, or awsvpc).
+    #[serde(default)]
+    pub network_mode: NetworkMode,
 
     /// IAM role ARN for the task (containers assume this role via credentials).
     #[serde(default)]
@@ -2306,5 +2352,107 @@ mod tests {
                 prop_assert!(result.is_err(), "relative path '{}' should be rejected", path);
             }
         }
+    }
+
+    // ── NetworkMode tests ───────────────────────────────────────────
+
+    #[test]
+    fn network_mode_default_is_bridge() {
+        let mode = NetworkMode::default();
+        assert_eq!(mode, NetworkMode::Bridge);
+        assert_eq!(mode.as_str(), "bridge");
+    }
+
+    #[test]
+    fn network_mode_effective_awsvpc_maps_to_bridge() {
+        assert_eq!(NetworkMode::Awsvpc.effective(), &NetworkMode::Bridge);
+    }
+
+    #[test]
+    fn network_mode_effective_identity() {
+        assert_eq!(NetworkMode::Bridge.effective(), &NetworkMode::Bridge);
+        assert_eq!(NetworkMode::Host.effective(), &NetworkMode::Host);
+        assert_eq!(NetworkMode::None.effective(), &NetworkMode::None);
+    }
+
+    #[test]
+    fn network_mode_as_str() {
+        assert_eq!(NetworkMode::Bridge.as_str(), "bridge");
+        assert_eq!(NetworkMode::Host.as_str(), "host");
+        assert_eq!(NetworkMode::None.as_str(), "none");
+        assert_eq!(NetworkMode::Awsvpc.as_str(), "awsvpc");
+    }
+
+    #[test]
+    fn parse_network_mode_bridge() {
+        let json = r#"{
+            "family": "test",
+            "networkMode": "bridge",
+            "containerDefinitions": [{"name":"app","image":"nginx:latest"}]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.network_mode, NetworkMode::Bridge);
+    }
+
+    #[test]
+    fn parse_network_mode_host() {
+        let json = r#"{
+            "family": "test",
+            "networkMode": "host",
+            "containerDefinitions": [{"name":"app","image":"nginx:latest"}]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.network_mode, NetworkMode::Host);
+    }
+
+    #[test]
+    fn parse_network_mode_none() {
+        let json = r#"{
+            "family": "test",
+            "networkMode": "none",
+            "containerDefinitions": [{"name":"app","image":"nginx:latest"}]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.network_mode, NetworkMode::None);
+    }
+
+    #[test]
+    fn parse_network_mode_awsvpc() {
+        let json = r#"{
+            "family": "test",
+            "networkMode": "awsvpc",
+            "containerDefinitions": [{"name":"app","image":"nginx:latest"}]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.network_mode, NetworkMode::Awsvpc);
+    }
+
+    #[test]
+    fn parse_network_mode_absent_defaults_to_bridge() {
+        let json = r#"{
+            "family": "test",
+            "containerDefinitions": [{"name":"app","image":"nginx:latest"}]
+        }"#;
+        let td = TaskDefinition::from_json(json).unwrap();
+        assert_eq!(td.network_mode, NetworkMode::Bridge);
+    }
+
+    #[test]
+    fn cfn_network_mode_host() {
+        use crate::taskdef::cloudformation::from_cfn_json;
+        let json = r#"{
+            "Resources": {
+                "Task": {
+                    "Type": "AWS::ECS::TaskDefinition",
+                    "Properties": {
+                        "Family": "test",
+                        "NetworkMode": "host",
+                        "ContainerDefinitions": [{"Name":"app","Image":"nginx:latest"}]
+                    }
+                }
+            }
+        }"#;
+        let td = from_cfn_json(json, None).unwrap();
+        assert_eq!(td.network_mode, NetworkMode::Host);
     }
 }

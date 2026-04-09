@@ -445,12 +445,13 @@ mod tests {
     use crate::events::NullEventSink;
     use crate::taskdef::{
         ContainerDefinition, DependencyCondition, DependsOn, Environment, ExtraHost, MountPoint,
-        PortMapping, Volume, VolumeHost,
+        NetworkMode, PortMapping, Volume, VolumeHost,
     };
 
     fn single_container_taskdef() -> TaskDefinition {
         TaskDefinition {
             family: "web".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],
@@ -465,6 +466,7 @@ mod tests {
     fn two_container_taskdef() -> TaskDefinition {
         TaskDefinition {
             family: "multi".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],
@@ -1117,6 +1119,7 @@ mod tests {
 
         let task_def = TaskDefinition {
             family: "test".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],

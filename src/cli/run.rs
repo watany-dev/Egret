@@ -628,7 +628,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{Cli, Command};
-    use crate::taskdef::{ContainerDefinition, Environment, PortMapping};
+    use crate::taskdef::{ContainerDefinition, Environment, NetworkMode, PortMapping};
 
     #[test]
     fn parse_run_with_no_metadata_flag() {
@@ -766,6 +766,7 @@ mod tests {
     fn display_dry_run_multi_container() {
         let td = TaskDefinition {
             family: "my-app".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],
@@ -803,6 +804,7 @@ mod tests {
         use crate::taskdef::{EnvironmentFile, LinuxParameters, TmpfsMount, Ulimit};
         let td = TaskDefinition {
             family: "test".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],

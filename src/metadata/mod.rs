@@ -359,11 +359,12 @@ async fn stats_not_implemented() -> StatusCode {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::taskdef::{ContainerDefinition, TaskDefinition};
+    use crate::taskdef::{ContainerDefinition, NetworkMode, TaskDefinition};
 
     fn sample_task_def() -> TaskDefinition {
         TaskDefinition {
             family: "my-app".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: Some("arn:aws:iam::123456789012:role/my-role".to_string()),
             execution_role_arn: None,
             volumes: vec![],
@@ -496,6 +497,7 @@ mod tests {
     fn build_task_metadata_no_role_arn() {
         let task_def = TaskDefinition {
             family: "test".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],

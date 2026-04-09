@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::{TaskDefError, TaskDefinition, Volume, VolumeHost};
+use super::{NetworkMode, TaskDefError, TaskDefinition, Volume, VolumeHost};
 
 /// Resource type identifier for ECS task definitions in Terraform.
 const ECS_TASK_DEF_TYPE: &str = "aws_ecs_task_definition";
@@ -263,6 +263,7 @@ fn convert_to_task_definition(
 
     let task_def = TaskDefinition {
         family,
+        network_mode: NetworkMode::default(),
         task_role_arn,
         execution_role_arn,
         volumes,

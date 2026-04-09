@@ -110,11 +110,12 @@ impl OverrideConfig {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::taskdef::{ContainerDefinition, Environment, PortMapping};
+    use crate::taskdef::{ContainerDefinition, Environment, NetworkMode, PortMapping};
 
     fn sample_task_def() -> TaskDefinition {
         TaskDefinition {
             family: "test".to_string(),
+            network_mode: NetworkMode::Bridge,
             task_role_arn: None,
             execution_role_arn: None,
             volumes: vec![],
