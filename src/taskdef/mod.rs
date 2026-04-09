@@ -60,6 +60,9 @@ pub enum TaskDefError {
     #[error("CloudFormation intrinsic function found in {field}: {detail}")]
     CfnIntrinsicFunction { field: String, detail: String },
 
+    #[error("failed to parse CloudFormation YAML template: {0}")]
+    ParseCfnYaml(String),
+
     #[error("failed to read environment file {path}: {source}")]
     EnvironmentFileRead {
         path: PathBuf,

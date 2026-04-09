@@ -60,6 +60,10 @@ struct CfnResource {
 
 /// Parse a `CloudFormation` template file and extract an ECS task definition.
 ///
+/// Automatically detects the format based on file extension:
+/// - `.yaml` / `.yml` → YAML parser
+/// - `.json` or other → JSON parser (with YAML fallback)
+///
 /// If the template contains multiple `AWS::ECS::TaskDefinition` resources,
 /// `resource_id` must be provided to select one by logical ID.
 pub fn from_cfn_file(
@@ -81,7 +85,59 @@ pub fn from_cfn_file(
         path: path.to_path_buf(),
         source,
     })?;
-    from_cfn_json(&content, resource_id)
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "yaml" | "yml" => from_cfn_yaml(&content, resource_id),
+        "json" => from_cfn_json(&content, resource_id),
+        _ => {
+            // Unknown extension: try JSON first, fall back to YAML.
+            from_cfn_json(&content, resource_id).or_else(|_| from_cfn_yaml(&content, resource_id))
+        }
+    }
+}
+
+/// Parse a `CloudFormation` template YAML string and extract an ECS task definition.
+///
+/// YAML custom tags (e.g. `!Ref`, `!Sub`) are converted to their JSON-form
+/// equivalents during deserialization, so the existing `detect_intrinsic_functions()`
+/// logic catches them.
+///
+/// If the template contains multiple `AWS::ECS::TaskDefinition` resources,
+/// `resource_id` must be provided to select one by logical ID.
+pub fn from_cfn_yaml(
+    yaml: &str,
+    resource_id: Option<&str>,
+) -> Result<TaskDefinition, TaskDefError> {
+    // Deserialize YAML into a generic JSON Value first, then convert to CfnTemplate.
+    // This approach handles YAML-specific types (anchors, aliases, tagged values) and
+    // produces a serde_json::Value that fits the existing downstream pipeline.
+    let value: Value =
+        serde_yaml_ng::from_str(yaml).map_err(|e| TaskDefError::ParseCfnYaml(e.to_string()))?;
+
+    let template: CfnTemplate =
+        serde_json::from_value(value).map_err(|e| TaskDefError::ParseCfnYaml(e.to_string()))?;
+
+    let resources = collect_ecs_resources(&template)?;
+    let (logical_id, properties) = select_resource(&resources, resource_id)?;
+
+    detect_intrinsic_functions(properties, logical_id)?;
+
+    let camel_value = convert_keys_to_camel_case(properties.clone());
+
+    let task_def: TaskDefinition = serde_json::from_value(camel_value).map_err(|e| {
+        TaskDefError::ParseCfnYaml(format!(
+            "failed to deserialize CloudFormation YAML properties for '{logical_id}': {e}"
+        ))
+    })?;
+
+    task_def.validate()?;
+    Ok(task_def)
 }
 
 /// Parse a `CloudFormation` template JSON string and extract an ECS task definition.
@@ -831,5 +887,265 @@ mod tests {
             matches!(err, TaskDefError::CfnNoEcsResource),
             "expected CfnNoEcsResource, got: {err}"
         );
+    }
+
+    // ── YAML tests ──────────────────────────────────────────────────
+
+    fn minimal_yaml_template() -> String {
+        r"
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  MyTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: my-app
+      ContainerDefinitions:
+        - Name: app
+          Image: nginx:latest
+          Essential: true
+"
+        .to_string()
+    }
+
+    #[test]
+    fn yaml_parse_minimal() {
+        let td = from_cfn_yaml(&minimal_yaml_template(), None).unwrap();
+        assert_eq!(td.family, "my-app");
+        assert_eq!(td.container_definitions.len(), 1);
+        assert_eq!(td.container_definitions[0].name, "app");
+        assert_eq!(td.container_definitions[0].image, "nginx:latest");
+        assert!(td.container_definitions[0].essential);
+    }
+
+    #[test]
+    fn yaml_parse_full_template() {
+        let yaml = r#"
+Resources:
+  MyTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: my-app
+      TaskRoleArn: "arn:aws:iam::123456789012:role/task-role"
+      ExecutionRoleArn: "arn:aws:iam::123456789012:role/exec-role"
+      ContainerDefinitions:
+        - Name: app
+          Image: nginx:latest
+          Essential: true
+          Command:
+            - nginx
+            - "-g"
+            - "daemon off;"
+          EntryPoint:
+            - /docker-entrypoint.sh
+          Environment:
+            - Name: ENV_VAR
+              Value: some-value
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 8080
+              Protocol: tcp
+          Cpu: 256
+          Memory: 512
+          MemoryReservation: 256
+"#;
+        let td = from_cfn_yaml(yaml, None).unwrap();
+        assert_eq!(td.family, "my-app");
+        let c = &td.container_definitions[0];
+        assert_eq!(c.command, vec!["nginx", "-g", "daemon off;"]);
+        assert_eq!(c.entry_point, vec!["/docker-entrypoint.sh"]);
+        assert_eq!(c.environment.len(), 1);
+        assert_eq!(c.port_mappings.len(), 1);
+        assert_eq!(c.port_mappings[0].container_port, 80);
+        assert_eq!(c.port_mappings[0].host_port, Some(8080));
+        assert_eq!(c.cpu, Some(256));
+        assert_eq!(c.memory, Some(512));
+    }
+
+    #[test]
+    fn yaml_parse_with_volumes() {
+        let yaml = r"
+Resources:
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: vol-app
+      ContainerDefinitions:
+        - Name: app
+          Image: nginx:latest
+          MountPoints:
+            - SourceVolume: data
+              ContainerPath: /data
+              ReadOnly: false
+      Volumes:
+        - Name: data
+          Host:
+            SourcePath: /host/data
+";
+        let td = from_cfn_yaml(yaml, None).unwrap();
+        assert_eq!(td.volumes.len(), 1);
+        assert_eq!(td.volumes[0].name, "data");
+        let host = td.volumes[0].host.as_ref().unwrap();
+        assert_eq!(host.source_path, "/host/data");
+    }
+
+    #[test]
+    fn yaml_parse_with_depends_on() {
+        let yaml = r"
+Resources:
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: dep-app
+      ContainerDefinitions:
+        - Name: db
+          Image: postgres:15
+          Essential: true
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - pg_isready
+        - Name: app
+          Image: myapp:latest
+          Essential: true
+          DependsOn:
+            - ContainerName: db
+              Condition: HEALTHY
+";
+        let td = from_cfn_yaml(yaml, None).unwrap();
+        assert_eq!(td.container_definitions.len(), 2);
+        let app = &td.container_definitions[1];
+        assert_eq!(app.depends_on.len(), 1);
+        assert_eq!(app.depends_on[0].container_name, "db");
+    }
+
+    #[test]
+    fn yaml_select_resource_by_id() {
+        let yaml = r"
+Resources:
+  TaskA:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: app-a
+      ContainerDefinitions:
+        - Name: a
+          Image: a:latest
+  TaskB:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: app-b
+      ContainerDefinitions:
+        - Name: b
+          Image: b:latest
+";
+        let td = from_cfn_yaml(yaml, Some("TaskB")).unwrap();
+        assert_eq!(td.family, "app-b");
+    }
+
+    #[test]
+    fn yaml_error_invalid() {
+        let err = from_cfn_yaml("invalid: yaml: [", None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::ParseCfnYaml(_)),
+            "expected ParseCfnYaml, got: {err}"
+        );
+    }
+
+    #[test]
+    fn yaml_error_no_ecs_resource() {
+        let yaml = r"
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+    Properties: {}
+";
+        let err = from_cfn_yaml(yaml, None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::CfnNoEcsResource),
+            "expected CfnNoEcsResource, got: {err}"
+        );
+    }
+
+    #[test]
+    fn yaml_error_multiple_resources() {
+        let yaml = r"
+Resources:
+  TaskA:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: app-a
+      ContainerDefinitions:
+        - Name: a
+          Image: a:latest
+  TaskB:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: app-b
+      ContainerDefinitions:
+        - Name: b
+          Image: b:latest
+";
+        let err = from_cfn_yaml(yaml, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("multiple"));
+    }
+
+    #[test]
+    fn yaml_file_extension_detection() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // .yaml extension → YAML parser
+        let yaml_path = dir.path().join("template.yaml");
+        std::fs::write(&yaml_path, minimal_yaml_template()).unwrap();
+        let td = from_cfn_file(&yaml_path, None).unwrap();
+        assert_eq!(td.family, "my-app");
+
+        // .yml extension → YAML parser
+        let yml_path = dir.path().join("template.yml");
+        std::fs::write(&yml_path, minimal_yaml_template()).unwrap();
+        let td = from_cfn_file(&yml_path, None).unwrap();
+        assert_eq!(td.family, "my-app");
+
+        // .json extension → JSON parser
+        let json_path = dir.path().join("template.json");
+        std::fs::write(&json_path, minimal_template()).unwrap();
+        let td = from_cfn_file(&json_path, None).unwrap();
+        assert_eq!(td.family, "my-app");
+    }
+
+    #[test]
+    fn yaml_unknown_extension_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Unknown extension with valid YAML → should succeed via fallback
+        let path = dir.path().join("template.cfn");
+        std::fs::write(&path, minimal_yaml_template()).unwrap();
+        let td = from_cfn_file(&path, None).unwrap();
+        assert_eq!(td.family, "my-app");
+
+        // Unknown extension with valid JSON → should succeed
+        let path2 = dir.path().join("template.txt");
+        std::fs::write(&path2, minimal_template()).unwrap();
+        let td = from_cfn_file(&path2, None).unwrap();
+        assert_eq!(td.family, "my-app");
+    }
+
+    #[test]
+    fn yaml_parse_with_secrets() {
+        let yaml = r#"
+Resources:
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: sec-app
+      ContainerDefinitions:
+        - Name: app
+          Image: myapp:latest
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/db-pass"
+"#;
+        let td = from_cfn_yaml(yaml, None).unwrap();
+        assert_eq!(td.container_definitions[0].secrets.len(), 1);
+        assert_eq!(td.container_definitions[0].secrets[0].name, "DB_PASSWORD");
     }
 }
