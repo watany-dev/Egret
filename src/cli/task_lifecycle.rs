@@ -335,22 +335,30 @@ fn build_container_env(
         .collect();
 
     if let Some(port) = metadata_port {
-        // In host mode, containers share the host's network namespace, so use 127.0.0.1.
-        // In bridge mode, use host.docker.internal to reach the host.
-        let host = match network_mode.effective() {
-            crate::taskdef::NetworkMode::Host => "127.0.0.1",
-            _ => "host.docker.internal",
-        };
+        // In none mode, containers have no network — skip metadata injection entirely.
+        if *network_mode.effective() == crate::taskdef::NetworkMode::None {
+            tracing::warn!(
+                container = %def.name,
+                "networkMode=none: metadata/credentials endpoint is not available"
+            );
+        } else {
+            // In host mode, containers share the host's network namespace, so use 127.0.0.1.
+            // In bridge mode, use host.docker.internal to reach the host.
+            let host = match network_mode.effective() {
+                crate::taskdef::NetworkMode::Host => "127.0.0.1",
+                _ => "host.docker.internal",
+            };
 
-        env.push(format!(
-            "ECS_CONTAINER_METADATA_URI_V4=http://{host}:{port}/v4/{}",
-            def.name
-        ));
-        env.push(format!(
-            "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://{host}:{port}/credentials"
-        ));
-        if let Some(token) = auth_token {
-            env.push(format!("AWS_CONTAINER_AUTHORIZATION_TOKEN={token}"));
+            env.push(format!(
+                "ECS_CONTAINER_METADATA_URI_V4=http://{host}:{port}/v4/{}",
+                def.name
+            ));
+            env.push(format!(
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://{host}:{port}/credentials"
+            ));
+            if let Some(token) = auth_token {
+                env.push(format!("AWS_CONTAINER_AUTHORIZATION_TOKEN={token}"));
+            }
         }
     }
 
@@ -1548,5 +1556,79 @@ mod tests {
         let config = build_container_config("test", &def, "", None, &[], None, &NetworkMode::Host);
 
         assert_eq!(config.network_mode, NetworkMode::Host);
+    }
+
+    #[test]
+    fn none_mode_skips_metadata_injection() {
+        let def = ContainerDefinition {
+            name: "worker".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config = build_container_config(
+            "test",
+            &def,
+            "",
+            Some(12345),
+            &[],
+            Some("token"),
+            &NetworkMode::None,
+        );
+
+        // None mode should NOT inject any metadata/credentials env vars.
+        assert!(
+            !config
+                .env
+                .iter()
+                .any(|e| e.starts_with("ECS_CONTAINER_METADATA_URI_V4=")),
+            "none mode should not inject metadata URI"
+        );
+        assert!(
+            !config
+                .env
+                .iter()
+                .any(|e| e.starts_with("AWS_CONTAINER_CREDENTIALS_FULL_URI=")),
+            "none mode should not inject credentials URI"
+        );
+        assert!(
+            !config
+                .env
+                .iter()
+                .any(|e| e.starts_with("AWS_CONTAINER_AUTHORIZATION_TOKEN=")),
+            "none mode should not inject auth token"
+        );
+    }
+
+    #[test]
+    fn none_mode_skips_extra_hosts() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "", None, &[], None, &NetworkMode::None);
+
+        assert!(
+            !config
+                .extra_hosts
+                .iter()
+                .any(|h| h.contains("host.docker.internal")),
+            "none mode should not add host.docker.internal"
+        );
+    }
+
+    #[test]
+    fn none_mode_sets_network_mode() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "", None, &[], None, &NetworkMode::None);
+
+        assert_eq!(config.network_mode, NetworkMode::None);
     }
 }
