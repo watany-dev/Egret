@@ -63,6 +63,26 @@ pub enum TaskDefError {
     #[error("failed to parse CloudFormation YAML template: {0}")]
     ParseCfnYaml(String),
 
+    #[error("CDK output directory not found: {path}")]
+    CdkDirectoryNotFound { path: PathBuf },
+
+    #[error("no *.template.json files found in CDK output directory: {path}")]
+    CdkNoTemplatesFound { path: PathBuf },
+
+    #[error("no AWS::ECS::TaskDefinition resources found in CDK output directory: {path}")]
+    CdkNoEcsResourcesFound { path: PathBuf },
+
+    #[error("CDK resource '{resource_id}' not found. Available: {available:?}")]
+    CdkResourceNotFound {
+        resource_id: String,
+        available: Vec<String>,
+    },
+
+    #[error(
+        "multiple AWS::ECS::TaskDefinition resources found across CDK templates: {candidates:?}. Use --cdk-resource to specify one"
+    )]
+    CdkMultipleResources { candidates: Vec<String> },
+
     #[error("failed to read environment file {path}: {source}")]
     EnvironmentFileRead {
         path: PathBuf,

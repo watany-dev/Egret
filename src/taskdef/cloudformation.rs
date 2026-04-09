@@ -5,7 +5,7 @@
 //! into [`TaskDefinition`].
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -138,6 +138,131 @@ pub fn from_cfn_yaml(
 
     task_def.validate()?;
     Ok(task_def)
+}
+
+/// Discover and parse ECS task definitions from a CDK output directory (`cdk.out/`).
+///
+/// Scans `*.template.json` files in the given directory, collects all
+/// `AWS::ECS::TaskDefinition` resources, and selects one. When exactly one
+/// resource exists across all templates it is returned automatically; otherwise
+/// `resource_id` must narrow the selection.
+pub fn discover_cdk_template(
+    cdk_dir: &Path,
+    resource_id: Option<&str>,
+) -> Result<TaskDefinition, TaskDefError> {
+    if !cdk_dir.is_dir() {
+        return Err(TaskDefError::CdkDirectoryNotFound {
+            path: cdk_dir.to_path_buf(),
+        });
+    }
+
+    let template_files = list_cdk_template_files(cdk_dir)?;
+
+    if template_files.is_empty() {
+        return Err(TaskDefError::CdkNoTemplatesFound {
+            path: cdk_dir.to_path_buf(),
+        });
+    }
+
+    // Collect (template_path, logical_id, properties_json) for all ECS resources.
+    let mut all_resources: Vec<(PathBuf, String, Value)> = Vec::new();
+
+    for template_path in &template_files {
+        let content =
+            std::fs::read_to_string(template_path).map_err(|source| TaskDefError::ReadFile {
+                path: template_path.clone(),
+                source,
+            })?;
+
+        let template: CfnTemplate = match serde_json::from_str(&content) {
+            Ok(t) => t,
+            Err(_) => continue, // Skip non-parseable files.
+        };
+
+        if let Ok(resources) = collect_ecs_resources(&template) {
+            for (logical_id, properties) in resources {
+                all_resources.push((
+                    template_path.clone(),
+                    logical_id.to_string(),
+                    properties.clone(),
+                ));
+            }
+        }
+    }
+
+    if all_resources.is_empty() {
+        return Err(TaskDefError::CdkNoEcsResourcesFound {
+            path: cdk_dir.to_path_buf(),
+        });
+    }
+
+    let (_, logical_id, properties) = select_cdk_resource(&all_resources, resource_id)?;
+
+    detect_intrinsic_functions(&properties, &logical_id)?;
+
+    let camel_value = convert_keys_to_camel_case(properties);
+
+    let task_def: TaskDefinition = serde_json::from_value(camel_value).map_err(|e| {
+        TaskDefError::ParseCfnJson(format!(
+            "failed to deserialize CDK properties for '{logical_id}': {e}"
+        ))
+    })?;
+
+    task_def.validate()?;
+    Ok(task_def)
+}
+
+/// List all `*.template.json` files in a CDK output directory (sorted for deterministic order).
+fn list_cdk_template_files(dir: &Path) -> Result<Vec<PathBuf>, TaskDefError> {
+    let entries = std::fs::read_dir(dir).map_err(|source| TaskDefError::ReadFile {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".template.json"))
+        })
+        .collect();
+
+    files.sort();
+    Ok(files)
+}
+
+/// Select a single ECS resource from all CDK resources found across templates.
+fn select_cdk_resource(
+    resources: &[(PathBuf, String, Value)],
+    resource_id: Option<&str>,
+) -> Result<(PathBuf, String, Value), TaskDefError> {
+    match resource_id {
+        Some(id) => {
+            for (path, logical_id, properties) in resources {
+                if logical_id == id {
+                    return Ok((path.clone(), logical_id.clone(), properties.clone()));
+                }
+            }
+            let available: Vec<String> = resources.iter().map(|(_, id, _)| id.clone()).collect();
+            Err(TaskDefError::CdkResourceNotFound {
+                resource_id: id.to_string(),
+                available,
+            })
+        }
+        None => {
+            if resources.len() == 1 {
+                let (path, id, props) = &resources[0];
+                Ok((path.clone(), id.clone(), props.clone()))
+            } else {
+                let mut candidates: Vec<String> =
+                    resources.iter().map(|(_, id, _)| id.clone()).collect();
+                candidates.sort();
+                Err(TaskDefError::CdkMultipleResources { candidates })
+            }
+        }
+    }
 }
 
 /// Parse a `CloudFormation` template JSON string and extract an ECS task definition.
@@ -1147,5 +1272,152 @@ Resources:
         let td = from_cfn_yaml(yaml, None).unwrap();
         assert_eq!(td.container_definitions[0].secrets.len(), 1);
         assert_eq!(td.container_definitions[0].secrets[0].name, "DB_PASSWORD");
+    }
+
+    // ── CDK discovery tests ─────────────────────────────────────────
+
+    fn cdk_template(family: &str, logical_id: &str) -> String {
+        format!(
+            r#"{{
+                "Resources": {{
+                    "{logical_id}": {{
+                        "Type": "AWS::ECS::TaskDefinition",
+                        "Properties": {{
+                            "Family": "{family}",
+                            "ContainerDefinitions": [
+                                {{"Name": "app", "Image": "nginx:latest"}}
+                            ]
+                        }}
+                    }}
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn cdk_discover_single_template() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("MyStack.template.json"),
+            cdk_template("cdk-app", "TaskDef"),
+        )
+        .unwrap();
+
+        let td = discover_cdk_template(dir.path(), None).unwrap();
+        assert_eq!(td.family, "cdk-app");
+    }
+
+    #[test]
+    fn cdk_discover_multiple_templates_single_ecs() {
+        let dir = tempfile::tempdir().unwrap();
+        // Template with ECS resource
+        std::fs::write(
+            dir.path().join("AppStack.template.json"),
+            cdk_template("cdk-app", "TaskDef"),
+        )
+        .unwrap();
+        // Template without ECS resource
+        std::fs::write(
+            dir.path().join("InfraStack.template.json"),
+            r#"{"Resources":{"Bucket":{"Type":"AWS::S3::Bucket","Properties":{}}}}"#,
+        )
+        .unwrap();
+
+        let td = discover_cdk_template(dir.path(), None).unwrap();
+        assert_eq!(td.family, "cdk-app");
+    }
+
+    #[test]
+    fn cdk_discover_select_by_resource_id() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Stack1.template.json"),
+            cdk_template("app-1", "TaskDefA"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Stack2.template.json"),
+            cdk_template("app-2", "TaskDefB"),
+        )
+        .unwrap();
+
+        let td = discover_cdk_template(dir.path(), Some("TaskDefB")).unwrap();
+        assert_eq!(td.family, "app-2");
+    }
+
+    #[test]
+    fn cdk_error_directory_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad_path = dir.path().join("nonexistent");
+        let err = discover_cdk_template(&bad_path, None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::CdkDirectoryNotFound { .. }),
+            "expected CdkDirectoryNotFound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cdk_error_no_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        // Empty directory
+        let err = discover_cdk_template(dir.path(), None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::CdkNoTemplatesFound { .. }),
+            "expected CdkNoTemplatesFound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cdk_error_no_ecs_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Stack.template.json"),
+            r#"{"Resources":{"Bucket":{"Type":"AWS::S3::Bucket","Properties":{}}}}"#,
+        )
+        .unwrap();
+
+        let err = discover_cdk_template(dir.path(), None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::CdkNoEcsResourcesFound { .. }),
+            "expected CdkNoEcsResourcesFound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cdk_error_multiple_resources_no_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Stack1.template.json"),
+            cdk_template("app-1", "TaskDefA"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Stack2.template.json"),
+            cdk_template("app-2", "TaskDefB"),
+        )
+        .unwrap();
+
+        let err = discover_cdk_template(dir.path(), None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::CdkMultipleResources { .. }),
+            "expected CdkMultipleResources, got: {err}"
+        );
+        assert!(err.to_string().contains("--cdk-resource"));
+    }
+
+    #[test]
+    fn cdk_error_resource_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Stack.template.json"),
+            cdk_template("app", "TaskDef"),
+        )
+        .unwrap();
+
+        let err = discover_cdk_template(dir.path(), Some("NonExistent")).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::CdkResourceNotFound { .. }),
+            "expected CdkResourceNotFound, got: {err}"
+        );
     }
 }

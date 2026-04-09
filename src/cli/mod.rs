@@ -83,26 +83,34 @@ pub struct TaskDefSourceArgs {
     #[arg(
         short = 'f',
         long = "task-definition",
-        conflicts_with_all = ["from_tf", "from_cfn"],
-        required_unless_present_any = ["from_tf", "from_cfn"]
+        conflicts_with_all = ["from_tf", "from_cfn", "from_cdk"],
+        required_unless_present_any = ["from_tf", "from_cfn", "from_cdk"]
     )]
     pub task_definition: Option<PathBuf>,
 
     /// Path to Terraform show JSON file (alternative to --task-definition)
-    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn"])]
+    #[arg(long = "from-tf", conflicts_with_all = ["task_definition", "from_cfn", "from_cdk"])]
     pub from_tf: Option<PathBuf>,
 
     /// Terraform resource address (required when multiple ECS task definitions exist)
     #[arg(long = "tf-resource", requires = "from_tf")]
     pub tf_resource: Option<String>,
 
-    /// Path to `CloudFormation` template JSON file (alternative to --task-definition)
-    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf"])]
+    /// Path to `CloudFormation` template JSON/YAML file (alternative to --task-definition)
+    #[arg(long = "from-cfn", conflicts_with_all = ["task_definition", "from_tf", "from_cdk"])]
     pub from_cfn: Option<PathBuf>,
 
     /// `CloudFormation` logical resource ID (required when multiple ECS task definitions exist)
     #[arg(long = "cfn-resource", requires = "from_cfn")]
     pub cfn_resource: Option<String>,
+
+    /// Path to CDK output directory (alternative to --task-definition)
+    #[arg(long = "from-cdk", conflicts_with_all = ["task_definition", "from_tf", "from_cfn"])]
+    pub from_cdk: Option<PathBuf>,
+
+    /// CDK logical resource ID (required when multiple ECS task definitions exist across CDK stacks)
+    #[arg(long = "cdk-resource", requires = "from_cdk")]
+    pub cdk_resource: Option<String>,
 
     /// Path to local override file
     #[arg(short, long)]
@@ -124,9 +132,10 @@ impl TaskDefSourceArgs {
             .as_deref()
             .or(self.from_tf.as_deref())
             .or(self.from_cfn.as_deref())
+            .or(self.from_cdk.as_deref())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "either --task-definition, --from-tf, or --from-cfn must be provided"
+                    "either --task-definition, --from-tf, --from-cfn, or --from-cdk must be provided"
                 )
             })
     }
@@ -144,6 +153,11 @@ impl TaskDefSourceArgs {
             Ok(cloudformation::from_cfn_file(
                 cfn_path,
                 self.cfn_resource.as_deref(),
+            )?)
+        } else if let Some(cdk_dir) = &self.from_cdk {
+            Ok(cloudformation::discover_cdk_template(
+                cdk_dir,
+                self.cdk_resource.as_deref(),
             )?)
         } else {
             let path = self.input_path()?;
@@ -1114,6 +1128,8 @@ mod tests {
             tf_resource: None,
             from_cfn: None,
             cfn_resource: None,
+            from_cdk: None,
+            cdk_resource: None,
             r#override: None,
             secrets: None,
             profile: None,
@@ -1224,6 +1240,79 @@ mod tests {
         args.from_cfn = Some(path);
         let td = args.parse_task_def().unwrap();
         assert_eq!(td.family, "cfn-test");
+    }
+
+    #[test]
+    fn source_args_input_path_from_cdk() {
+        let mut args = make_source_args(None);
+        args.from_cdk = Some(PathBuf::from("cdk.out"));
+        assert_eq!(args.input_path().unwrap(), std::path::Path::new("cdk.out"));
+    }
+
+    #[test]
+    fn source_args_parse_task_def_from_cdk() {
+        let dir = tempfile::tempdir().unwrap();
+        let cdk_out = dir.path().join("cdk.out");
+        std::fs::create_dir(&cdk_out).unwrap();
+        std::fs::write(
+            cdk_out.join("MyStack.template.json"),
+            r#"{
+                "Resources": {
+                    "TaskDef": {
+                        "Type": "AWS::ECS::TaskDefinition",
+                        "Properties": {
+                            "Family": "cdk-test",
+                            "ContainerDefinitions": [{"Name":"api","Image":"node:20"}]
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mut args = make_source_args(None);
+        args.from_cdk = Some(cdk_out);
+        let td = args.parse_task_def().unwrap();
+        assert_eq!(td.family, "cdk-test");
+    }
+
+    #[test]
+    fn parse_run_with_from_cdk() {
+        let cli =
+            Cli::try_parse_from(["lecs", "run", "--from-cdk", "cdk.out"]).expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(
+                    args.source.from_cdk.as_ref().unwrap().to_str(),
+                    Some("cdk.out")
+                );
+                assert!(args.source.cdk_resource.is_none());
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn parse_run_from_cdk_with_resource() {
+        let cli = Cli::try_parse_from([
+            "lecs",
+            "run",
+            "--from-cdk",
+            "cdk.out",
+            "--cdk-resource",
+            "MyTaskDef",
+        ])
+        .expect("should parse");
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(
+                    args.source.from_cdk.as_ref().unwrap().to_str(),
+                    Some("cdk.out")
+                );
+                assert_eq!(args.source.cdk_resource.as_deref(), Some("MyTaskDef"));
+            }
+            _ => panic!("expected Run command"),
+        }
     }
 
     #[test]
