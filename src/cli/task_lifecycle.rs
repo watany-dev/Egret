@@ -29,8 +29,24 @@ pub async fn run_task(
     auth_token: Option<&str>,
     event_sink: &dyn EventSink,
 ) -> Result<(String, Vec<(String, String)>)> {
-    let network_name = client.create_network(&task_def.family).await?;
-    tracing::info!(network = %network_name, "Created network");
+    let effective_mode = task_def.network_mode.effective();
+
+    // Only create a network for bridge mode; host/none don't need one.
+    let network_name = match effective_mode {
+        crate::taskdef::NetworkMode::Host | crate::taskdef::NetworkMode::None => {
+            tracing::info!(
+                mode = task_def.network_mode.as_str(),
+                "Skipping network creation for {} mode",
+                effective_mode.as_str()
+            );
+            String::new()
+        }
+        _ => {
+            let name = client.create_network(&task_def.family).await?;
+            tracing::info!(network = %name, "Created network");
+            name
+        }
+    };
 
     let specs: Vec<ContainerSpec> = task_def
         .container_definitions
@@ -43,6 +59,7 @@ pub async fn run_task(
                 metadata_port,
                 &task_def.volumes,
                 auth_token,
+                &task_def.network_mode,
             );
             ContainerSpec {
                 name: def.name.clone(),
@@ -96,7 +113,7 @@ pub async fn start_metadata_server(
         .map(|def| {
             (
                 def.name.clone(),
-                build_container_metadata(&task_def.family, def),
+                build_container_metadata(&task_def.family, def, &task_def.network_mode),
             )
         })
         .collect();
@@ -232,10 +249,12 @@ pub async fn cleanup(
         tracing::info!(container = %name, "Cleaned up");
     }
 
-    if let Err(e) = client.remove_network(network).await {
-        tracing::warn!(network = %network, error = %e, "Failed to remove network");
+    if !network.is_empty() {
+        if let Err(e) = client.remove_network(network).await {
+            tracing::warn!(network = %network, error = %e, "Failed to remove network");
+        }
+        tracing::info!(network = %network, "Network removed");
     }
-    tracing::info!(network = %network, "Network removed");
 
     event_sink.emit(&LifecycleEvent::new(
         EventType::CleanupCompleted,
@@ -307,6 +326,7 @@ fn build_container_env(
     def: &ContainerDefinition,
     metadata_port: Option<u16>,
     auth_token: Option<&str>,
+    network_mode: &crate::taskdef::NetworkMode,
 ) -> Vec<String> {
     let mut env: Vec<String> = def
         .environment
@@ -315,12 +335,19 @@ fn build_container_env(
         .collect();
 
     if let Some(port) = metadata_port {
+        // In host mode, containers share the host's network namespace, so use 127.0.0.1.
+        // In bridge mode, use host.docker.internal to reach the host.
+        let host = match network_mode.effective() {
+            crate::taskdef::NetworkMode::Host => "127.0.0.1",
+            _ => "host.docker.internal",
+        };
+
         env.push(format!(
-            "ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:{port}/v4/{}",
+            "ECS_CONTAINER_METADATA_URI_V4=http://{host}:{port}/v4/{}",
             def.name
         ));
         env.push(format!(
-            "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://host.docker.internal:{port}/credentials"
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://{host}:{port}/credentials"
         ));
         if let Some(token) = auth_token {
             env.push(format!("AWS_CONTAINER_AUTHORIZATION_TOKEN={token}"));
@@ -343,15 +370,30 @@ fn build_health_check_config(hc: &crate::taskdef::HealthCheck) -> HealthCheckCon
 }
 
 /// Build `extra_hosts` entries, ensuring `host.docker.internal` is always present.
-fn build_extra_hosts(def: &ContainerDefinition) -> Vec<String> {
+///
+/// In host/none mode, extra hosts are not added since the container shares
+/// or has no network stack — `host.docker.internal` is unnecessary.
+fn build_extra_hosts(
+    def: &ContainerDefinition,
+    network_mode: &crate::taskdef::NetworkMode,
+) -> Vec<String> {
     let mut hosts: Vec<String> = def
         .extra_hosts
         .iter()
         .map(|h| format!("{}:{}", h.hostname, h.ip_address))
         .collect();
-    if !hosts.iter().any(|h| h.starts_with("host.docker.internal:")) {
-        hosts.push("host.docker.internal:host-gateway".to_string());
+
+    match network_mode.effective() {
+        crate::taskdef::NetworkMode::Host | crate::taskdef::NetworkMode::None => {
+            // No need to add host.docker.internal for host/none modes.
+        }
+        _ => {
+            if !hosts.iter().any(|h| h.starts_with("host.docker.internal:")) {
+                hosts.push("host.docker.internal:host-gateway".to_string());
+            }
+        }
     }
+
     hosts
 }
 
@@ -385,13 +427,14 @@ pub fn build_container_config(
     metadata_port: Option<u16>,
     volumes: &[Volume],
     auth_token: Option<&str>,
+    network_mode: &crate::taskdef::NetworkMode,
 ) -> ContainerConfig {
     ContainerConfig {
         name: format!("{family}-{}", def.name),
         image: def.image.clone(),
         command: def.command.clone(),
         entry_point: def.entry_point.clone(),
-        env: build_container_env(def, metadata_port, auth_token),
+        env: build_container_env(def, metadata_port, auth_token, network_mode),
         port_mappings: def
             .port_mappings
             .iter()
@@ -403,8 +446,9 @@ pub fn build_container_config(
             .collect(),
         network: network.into(),
         network_aliases: vec![def.name.clone()],
+        network_mode: network_mode.clone(),
         labels: build_container_labels(family, def),
-        extra_hosts: build_extra_hosts(def),
+        extra_hosts: build_extra_hosts(def, network_mode),
         health_check: def.health_check.as_ref().map(build_health_check_config),
         binds: resolve_binds(&def.mount_points, volumes),
         working_dir: def.working_directory.clone(),
@@ -862,7 +906,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("my-app", &def, "lecs-my-app", None, &[], None);
+        let config = build_container_config(
+            "my-app",
+            &def,
+            "lecs-my-app",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert_eq!(config.name, "my-app-app");
         assert_eq!(config.image, "nginx:latest");
@@ -893,7 +945,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         // host_port defaults to container_port
         assert_eq!(config.port_mappings[0].host_port, 3000);
@@ -912,7 +972,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         // User labels are included
         assert_eq!(config.labels.get("com.example.env").unwrap(), "dev");
@@ -932,7 +1000,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
         assert!(config.extra_hosts.contains(&"myhost:10.0.0.1".to_string()));
         // Default host.docker.internal should still be present
         assert!(
@@ -954,7 +1030,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
         assert_eq!(config.extra_hosts, vec!["host.docker.internal:192.168.1.1"]);
     }
 
@@ -966,7 +1050,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
         assert_eq!(
             config.extra_hosts,
             vec!["host.docker.internal:host-gateway"]
@@ -981,7 +1073,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert!(config.command.is_empty());
         assert!(config.entry_point.is_empty());
@@ -997,7 +1097,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", Some(12345), &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            Some(12345),
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert!(config.env.contains(
             &"ECS_CONTAINER_METADATA_URI_V4=http://host.docker.internal:12345/v4/app".to_string()
@@ -1025,6 +1133,7 @@ mod tests {
             Some(12345),
             &[],
             Some("my-secret-token"),
+            &NetworkMode::Bridge,
         );
 
         assert!(
@@ -1042,7 +1151,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", Some(12345), &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            Some(12345),
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert!(
             !config
@@ -1060,7 +1177,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert!(
             !config
@@ -1093,7 +1218,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
         let hc = config
             .health_check
             .as_ref()
@@ -1238,7 +1371,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &volumes, None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &volumes,
+            None,
+            &NetworkMode::Bridge,
+        );
         assert_eq!(config.binds, vec!["/host/data:/app/data"]);
     }
 
@@ -1256,7 +1397,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert_eq!(config.cpu_units, Some(256));
         assert_eq!(config.memory_mib, Some(512));
@@ -1292,7 +1441,15 @@ mod tests {
             ..Default::default()
         };
 
-        let config = build_container_config("test", &def, "lecs-test", None, &[], None);
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
 
         assert_eq!(config.ulimits.len(), 1);
         assert_eq!(config.ulimits[0].name, "nofile");
@@ -1304,5 +1461,92 @@ mod tests {
         let tmpfs_opts = config.tmpfs.get("/run").unwrap();
         assert!(tmpfs_opts.contains("size=67108864"));
         assert!(tmpfs_opts.contains("rw"));
+    }
+
+    // ── Network mode tests ──────────────────────────────────────────
+
+    #[test]
+    fn host_mode_metadata_uri_uses_localhost() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config =
+            build_container_config("test", &def, "", Some(12345), &[], None, &NetworkMode::Host);
+
+        let metadata_uri = config
+            .env
+            .iter()
+            .find(|e| e.starts_with("ECS_CONTAINER_METADATA_URI_V4="))
+            .expect("should have metadata URI");
+        assert!(
+            metadata_uri.contains("127.0.0.1"),
+            "host mode should use 127.0.0.1, got: {metadata_uri}"
+        );
+        assert!(
+            !metadata_uri.contains("host.docker.internal"),
+            "host mode should NOT use host.docker.internal"
+        );
+    }
+
+    #[test]
+    fn host_mode_skips_extra_hosts() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "", None, &[], None, &NetworkMode::Host);
+
+        assert!(
+            !config
+                .extra_hosts
+                .iter()
+                .any(|h| h.contains("host.docker.internal")),
+            "host mode should not add host.docker.internal to extra_hosts"
+        );
+    }
+
+    #[test]
+    fn bridge_mode_adds_extra_hosts() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config = build_container_config(
+            "test",
+            &def,
+            "lecs-test",
+            None,
+            &[],
+            None,
+            &NetworkMode::Bridge,
+        );
+
+        assert!(
+            config
+                .extra_hosts
+                .iter()
+                .any(|h| h.contains("host.docker.internal")),
+            "bridge mode should add host.docker.internal"
+        );
+    }
+
+    #[test]
+    fn host_mode_sets_network_mode() {
+        let def = ContainerDefinition {
+            name: "app".to_string(),
+            image: "alpine:latest".to_string(),
+            ..Default::default()
+        };
+
+        let config = build_container_config("test", &def, "", None, &[], None, &NetworkMode::Host);
+
+        assert_eq!(config.network_mode, NetworkMode::Host);
     }
 }

@@ -200,6 +200,7 @@ pub async fn run_service_loop(
                 metadata_port,
                 &task_def.volumes,
                 auth_token,
+                &task_def.network_mode,
             );
             (def.name.clone(), config)
         })

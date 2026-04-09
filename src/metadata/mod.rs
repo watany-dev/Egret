@@ -137,7 +137,7 @@ pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
     let containers: Vec<ContainerMetadata> = task_def
         .container_definitions
         .iter()
-        .map(|def| build_container_metadata(&task_def.family, def))
+        .map(|def| build_container_metadata(&task_def.family, def, &task_def.network_mode))
         .collect();
 
     TaskMetadata {
@@ -155,7 +155,11 @@ pub fn build_task_metadata(task_def: &TaskDefinition) -> TaskMetadata {
 }
 
 /// Build container-level metadata from a container definition.
-pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> ContainerMetadata {
+pub fn build_container_metadata(
+    family: &str,
+    def: &ContainerDefinition,
+    network_mode: &crate::taskdef::NetworkMode,
+) -> ContainerMetadata {
     let docker_name = format!("{family}-{}", def.name);
     let container_arn = format!(
         "arn:aws:ecs:local:000000000000:container/lecs/{}/{}",
@@ -186,7 +190,7 @@ pub fn build_container_metadata(family: &str, def: &ContainerDefinition) -> Cont
         known_status: "RUNNING".to_string(),
         container_arn,
         networks: vec![NetworkMetadata {
-            network_mode: "bridge".to_string(),
+            network_mode: network_mode.effective().as_str().to_string(),
             ipv4_addresses: vec![],
         }],
         container_type: "NORMAL".to_string(),
@@ -420,7 +424,7 @@ mod tests {
             ..Default::default()
         };
 
-        let meta = build_container_metadata("my-app", &def);
+        let meta = build_container_metadata("my-app", &def, &NetworkMode::Bridge);
         let json = serde_json::to_value(&meta).expect("should serialize");
 
         // Verify custom-renamed keys
@@ -471,7 +475,7 @@ mod tests {
             ..Default::default()
         };
 
-        let meta = build_container_metadata("test", &def);
+        let meta = build_container_metadata("test", &def, &NetworkMode::Bridge);
         let limits = meta.limits.expect("should have limits");
         assert_eq!(limits.cpu, 256);
         assert_eq!(limits.memory, 512);
@@ -485,7 +489,7 @@ mod tests {
             ..Default::default()
         };
 
-        let meta = build_container_metadata("test", &def);
+        let meta = build_container_metadata("test", &def, &NetworkMode::Bridge);
         assert!(meta.limits.is_none());
 
         // Also verify Limits is omitted from JSON
@@ -525,7 +529,7 @@ mod tests {
             ..Default::default()
         };
 
-        let meta = build_container_metadata("test", &def);
+        let meta = build_container_metadata("test", &def, &NetworkMode::Bridge);
         assert!(meta.limits.is_none());
     }
 
@@ -549,7 +553,7 @@ mod tests {
             .map(|def| {
                 (
                     def.name.clone(),
-                    build_container_metadata(&task_def.family, def),
+                    build_container_metadata(&task_def.family, def, &task_def.network_mode),
                 )
             })
             .collect();

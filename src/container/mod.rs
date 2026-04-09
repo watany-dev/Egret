@@ -95,6 +95,8 @@ pub struct ContainerConfig {
     pub port_mappings: Vec<PortMappingConfig>,
     pub network: String,
     pub network_aliases: Vec<String>,
+    /// Network mode for this container (bridge, host, none).
+    pub network_mode: crate::taskdef::NetworkMode,
     pub labels: HashMap<String, String>,
     /// Extra host-to-IP mappings (e.g., `host.docker.internal:host-gateway`).
     pub extra_hosts: Vec<String>,
@@ -750,6 +752,7 @@ fn extract_inspect_ports(resp: &bollard::models::ContainerInspectResponse) -> Ve
 fn build_host_config(
     config: &ContainerConfig,
     port_bindings: HashMap<String, Option<Vec<PortBinding>>>,
+    network_mode: Option<String>,
 ) -> HostConfig {
     let extra_hosts = if config.extra_hosts.is_empty() {
         None
@@ -767,6 +770,7 @@ fn build_host_config(
         port_bindings: Some(port_bindings),
         extra_hosts,
         binds,
+        network_mode,
         nano_cpus: config
             .cpu_units
             .map(|cpu| i64::from(cpu) * 1_000_000_000 / 1024),
@@ -820,16 +824,24 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         );
     }
 
-    let endpoint_settings = EndpointSettings {
-        aliases: Some(config.network_aliases.clone()),
-        ..Default::default()
+    let effective_mode = config.network_mode.effective();
+
+    let (networking_config, host_network_mode) = match effective_mode {
+        crate::taskdef::NetworkMode::Host => (None, Some("host".to_string())),
+        crate::taskdef::NetworkMode::None => (None, Some("none".to_string())),
+        _ => {
+            let endpoint_settings = EndpointSettings {
+                aliases: Some(config.network_aliases.clone()),
+                ..Default::default()
+            };
+            let nc = bollard::container::NetworkingConfig {
+                endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
+            };
+            (Some(nc), None)
+        }
     };
 
-    let networking_config = bollard::container::NetworkingConfig {
-        endpoints_config: HashMap::from([(config.network.clone(), endpoint_settings)]),
-    };
-
-    let host_config = build_host_config(config, port_bindings);
+    let host_config = build_host_config(config, port_bindings, host_network_mode);
 
     let cmd = if config.command.is_empty() {
         None
@@ -865,7 +877,7 @@ pub fn build_bollard_config(config: &ContainerConfig) -> Config<String> {
         env,
         exposed_ports: Some(exposed_ports),
         host_config: Some(host_config),
-        networking_config: Some(networking_config),
+        networking_config,
         labels: Some(config.labels.clone()),
         healthcheck,
         working_dir: config.working_dir.clone(),
@@ -1393,5 +1405,67 @@ mod tests {
 
         let host_config = result.host_config.as_ref().expect("host_config");
         assert!(host_config.binds.is_none());
+    }
+
+    #[test]
+    fn build_bollard_config_host_mode() {
+        let config = ContainerConfig {
+            network_mode: crate::taskdef::NetworkMode::Host,
+            name: "test-app".to_string(),
+            image: "nginx:latest".to_string(),
+            ..Default::default()
+        };
+        let result = build_bollard_config(&config);
+
+        // Host mode: no networking_config, HostConfig.network_mode = "host"
+        assert!(
+            result.networking_config.is_none(),
+            "host mode should have no networking_config"
+        );
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert_eq!(hc.network_mode.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn build_bollard_config_none_mode() {
+        let config = ContainerConfig {
+            network_mode: crate::taskdef::NetworkMode::None,
+            name: "test-app".to_string(),
+            image: "nginx:latest".to_string(),
+            ..Default::default()
+        };
+        let result = build_bollard_config(&config);
+
+        // None mode: no networking_config, HostConfig.network_mode = "none"
+        assert!(
+            result.networking_config.is_none(),
+            "none mode should have no networking_config"
+        );
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert_eq!(hc.network_mode.as_deref(), Some("none"));
+    }
+
+    #[test]
+    fn build_bollard_config_bridge_mode() {
+        let config = ContainerConfig {
+            network_mode: crate::taskdef::NetworkMode::Bridge,
+            network: "lecs-test".to_string(),
+            network_aliases: vec!["app".to_string()],
+            name: "test-app".to_string(),
+            image: "nginx:latest".to_string(),
+            ..Default::default()
+        };
+        let result = build_bollard_config(&config);
+
+        // Bridge mode: has networking_config, no HostConfig.network_mode
+        assert!(
+            result.networking_config.is_some(),
+            "bridge mode should have networking_config"
+        );
+        let hc = result.host_config.as_ref().expect("host_config");
+        assert!(
+            hc.network_mode.is_none(),
+            "bridge mode should not set HostConfig.network_mode"
+        );
     }
 }
