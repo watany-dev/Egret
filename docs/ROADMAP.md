@@ -250,9 +250,25 @@ src/
 
 ---
 
+### Phase 13: CloudFormation YAML + ネットワークモード拡張 ✅
+**目標**: YAML テンプレート対応・CDK 自動探索・ネットワークモード（host/none/awsvpc）サポート
+
+- [x] CloudFormation YAML テンプレートパーサ（`serde_yaml_ng` 利用）
+  - 拡張子ベースのフォーマット自動検出（`.yaml`/`.yml` → YAML、`.json` → JSON）
+  - YAML カスタムタグ（`!Ref`, `!Sub`）の検出とエラー報告
+- [x] `--from-cdk <dir>` — CDK 出力ディレクトリ自動探索
+  - `cdk.out/*.template.json` の列挙と ECS リソース自動選択
+  - `--cdk-resource` による明示的論理 ID 指定
+- [x] `NetworkMode` enum（`Bridge` / `Host` / `None` / `Awsvpc`）
+  - `host` モード: ホストネットワーク共有、メタデータ URI は `127.0.0.1`
+  - `none` モード: ネットワークなし、メタデータ/クレデンシャル URI 非注入
+  - `awsvpc` → `bridge` エイリアス（警告付き）
+- [x] バリデーション: awsvpc 警告、host モードポート不一致警告
+
+---
+
 ## 将来検討
 
-- **Phase 13**: ネットワークモード拡張（`networkMode: host` / `none`）
 - **Phase 14**: Docker Compose 互換（`lecs convert`, `lecs run --compose`）
 
 ---
@@ -265,8 +281,8 @@ src/
   - Intrinsic Function（`Ref`, `Fn::Sub` 等）の検出・エラー報告
 - [x] `--cfn-resource` フラグ — 複数 ECS リソースから1つを論理IDで選択
 - [x] 対応コマンド: `lecs run`, `lecs validate`, `lecs watch`
-- [ ] YAML テンプレート対応（将来対応）
-- [ ] `--from-cdk` による `cdk.out/` ディレクトリ自動探索（将来対応）
+- [x] YAML テンプレート対応（Phase 13 で実装）
+- [x] `--from-cdk` による `cdk.out/` ディレクトリ自動探索（Phase 13 で実装）
 
 ---
 
@@ -294,8 +310,10 @@ Phase 0-2.5: ✅ 完了
     │                       │       └── Phase 11 (ECS Exec + 環境変数拡張) ✅
     │                       │
     │                       ├── Phase 10b (CloudFormation / CDK 互換性) ✅
+    │                       │       │
+    │                       │       └── Phase 13 (CloudFormation YAML + ネットワークモード拡張) ✅
     │                       │
-    │                       └── Phase 12 (サービスモード MVP)
+    │                       └── Phase 12 (サービスモード MVP) ✅
 ```
 
 ---
@@ -309,7 +327,7 @@ Phase 0-2.5: ✅ 完了
 - Auto Scaling / ローリングデプロイ（Phase 12 MVP には含まず）
 - コンテナイメージのビルド（Docker/Buildah/Kaniko の責務）
 - Prometheus / Grafana 等の外部監視スタック連携
-- awsvpc ネットワークモード完全再現
+- awsvpc ネットワークモード完全再現（Phase 13 で bridge エイリアスとして部分対応済み）
 - Service Mesh / Service Connect
 - ECR push/pull（Docker CLI の責務）
 - Cluster / Container Instance 管理（ローカルでは不要）
