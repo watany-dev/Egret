@@ -42,6 +42,9 @@ pub async fn run_task(
             String::new()
         }
         _ => {
+            if task_def.network_mode == crate::taskdef::NetworkMode::Awsvpc {
+                tracing::warn!("awsvpc network mode is treated as bridge locally");
+            }
             let name = client.create_network(&task_def.family).await?;
             tracing::info!(network = %name, "Created network");
             name

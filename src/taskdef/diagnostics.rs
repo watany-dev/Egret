@@ -1146,6 +1146,107 @@ mod tests {
 
     // --- validate_extended integration with all checks ---
 
+    // --- Network mode diagnostic tests ---
+
+    #[test]
+    fn network_mode_awsvpc_warning() {
+        let td = make_task_def(
+            r#"{
+            "family": "test",
+            "networkMode": "awsvpc",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#,
+        );
+        let report = validate_extended(&td);
+        let awsvpc_diags: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|d| d.field_path == "networkMode")
+            .collect();
+        assert_eq!(awsvpc_diags.len(), 1);
+        assert_eq!(awsvpc_diags[0].severity, Severity::Warning);
+        assert!(awsvpc_diags[0].message.contains("bridge"));
+    }
+
+    #[test]
+    fn network_mode_bridge_no_warning() {
+        let td = make_task_def(
+            r#"{
+            "family": "test",
+            "networkMode": "bridge",
+            "containerDefinitions": [
+                { "name": "app", "image": "nginx:latest" }
+            ]
+        }"#,
+        );
+        let report = validate_extended(&td);
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|d| d.field_path == "networkMode"),
+            "bridge mode should not produce networkMode warnings"
+        );
+    }
+
+    #[test]
+    fn network_mode_host_port_mismatch_warning() {
+        let td = make_task_def(
+            r#"{
+            "family": "test",
+            "networkMode": "host",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "portMappings": [
+                        { "containerPort": 80, "hostPort": 8080 }
+                    ]
+                }
+            ]
+        }"#,
+        );
+        let report = validate_extended(&td);
+        let port_diags: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.contains("hostPort"))
+            .collect();
+        assert_eq!(port_diags.len(), 1);
+        assert_eq!(port_diags[0].severity, Severity::Warning);
+        assert!(port_diags[0].message.contains("80"));
+        assert!(port_diags[0].message.contains("8080"));
+    }
+
+    #[test]
+    fn network_mode_host_matching_ports_no_warning() {
+        let td = make_task_def(
+            r#"{
+            "family": "test",
+            "networkMode": "host",
+            "containerDefinitions": [
+                {
+                    "name": "app",
+                    "image": "nginx:latest",
+                    "portMappings": [
+                        { "containerPort": 80, "hostPort": 80 }
+                    ]
+                }
+            ]
+        }"#,
+        );
+        let report = validate_extended(&td);
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("hostPort") && d.message.contains("host network")),
+            "matching hostPort should not produce warning"
+        );
+    }
+
     // --- Property-based tests ---
 
     mod pbt {
