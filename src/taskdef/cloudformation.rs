@@ -1274,6 +1274,100 @@ Resources:
         assert_eq!(td.container_definitions[0].secrets[0].name, "DB_PASSWORD");
     }
 
+    #[test]
+    fn yaml_error_intrinsic_ref_tag() {
+        // YAML custom tag !Ref cannot be deserialized into serde_json::Value,
+        // so it triggers a ParseCfnYaml error during the initial parse step.
+        let yaml = r"
+Resources:
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: my-app
+      TaskRoleArn: !Ref TaskRoleParam
+      ContainerDefinitions:
+        - Name: app
+          Image: nginx:latest
+";
+        let err = from_cfn_yaml(yaml, None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::ParseCfnYaml(_)),
+            "expected ParseCfnYaml, got: {err}"
+        );
+    }
+
+    #[test]
+    fn yaml_error_intrinsic_sub_tag() {
+        let yaml = r#"
+Resources:
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: my-app
+      ContainerDefinitions:
+        - Name: app
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/myapp:latest"
+"#;
+        let err = from_cfn_yaml(yaml, None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::ParseCfnYaml(_)),
+            "expected ParseCfnYaml, got: {err}"
+        );
+    }
+
+    #[test]
+    fn yaml_anchors_and_aliases() {
+        // YAML anchors (&) and aliases (*) should be resolved by the parser.
+        let yaml = r"
+Resources:
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: anchor-app
+      ContainerDefinitions:
+        - &base_container
+          Name: app
+          Image: nginx:latest
+          Essential: true
+          Environment:
+            - Name: ENV
+              Value: prod
+";
+        let td = from_cfn_yaml(yaml, None).unwrap();
+        assert_eq!(td.family, "anchor-app");
+        assert_eq!(td.container_definitions[0].environment.len(), 1);
+    }
+
+    #[test]
+    fn yaml_empty_template() {
+        let err = from_cfn_yaml("", None).unwrap_err();
+        assert!(
+            matches!(err, TaskDefError::ParseCfnYaml(_)),
+            "expected ParseCfnYaml, got: {err}"
+        );
+    }
+
+    #[test]
+    fn yaml_json_equivalent_output() {
+        // Verify that the same template in JSON and YAML produces identical TaskDefinition.
+        let json_td = from_cfn_json(&minimal_template(), None).unwrap();
+        let yaml_td = from_cfn_yaml(&minimal_yaml_template(), None).unwrap();
+
+        assert_eq!(json_td.family, yaml_td.family);
+        assert_eq!(
+            json_td.container_definitions.len(),
+            yaml_td.container_definitions.len()
+        );
+        assert_eq!(
+            json_td.container_definitions[0].name,
+            yaml_td.container_definitions[0].name
+        );
+        assert_eq!(
+            json_td.container_definitions[0].image,
+            yaml_td.container_definitions[0].image
+        );
+    }
+
     // ── CDK discovery tests ─────────────────────────────────────────
 
     fn cdk_template(family: &str, logical_id: &str) -> String {
